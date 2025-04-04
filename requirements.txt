@@ -1,0 +1,7 @@
+Flask
+Flask-SQLAlchemy
+Flask-Login
+cryptography
+pandas
+yfinance
+psycopg2-binary

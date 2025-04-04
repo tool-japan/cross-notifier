@@ -77,6 +77,7 @@ def logout():
     logout_user()
     return redirect("/login")
 
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5000))  # Renderが使うPORT環境変数を取得

@@ -75,7 +75,7 @@ def mypage():
     return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
 
 @app.route("/register", methods=["GET", "POST"])
-@admin_required
+# @admin_required  ← これをコメントアウト！
 def register():
     html = """
     <h1>新規ユーザー登録（管理者専用）</h1>

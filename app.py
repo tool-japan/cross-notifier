@@ -60,7 +60,9 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    html = """<form method='POST'>
+    html = """
+    <h1>ログインページ（仮）</h1>
+    <form method='POST'>
         <input name='username'><br>
         <input name='password' type='password'><br>
         <input type='submit'>

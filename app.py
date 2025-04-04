@@ -1,90 +1,106 @@
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, abort
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
-from cryptography.fernet import Fernet
-import os, secrets
+from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import os
+from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = os.environ.get("SECRET_KEY", "devkey")
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 
+# DB & Login
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 
-ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
-fernet = Fernet(ENCRYPTION_KEY)
+# Flask-Limiter（ログイン制限）
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
 
-class User(UserMixin, db.Model):
+# User Model
+class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(64), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-    email = db.Column(db.String(255), nullable=False)
-    symbols = db.Column(db.Text, nullable=False)
-    smtp_email = db.Column(db.String(255), nullable=False)
-    smtp_password = db.Column(db.Text, nullable=False)
-    notify_enabled = db.Column(db.Boolean, default=True)
-    role = db.Column(db.String(10), default='user')
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password_hash = db.Column(db.String(100), nullable=False)
+    role = db.Column(db.String(10), default="user")  # "admin" or "user"
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-@app.route("/register", methods=["GET", "POST"])
-@login_required
-def register():
-    html = """<form method='POST'>
-        <label>通知ON/OFF</label>
-        <select name='notify_enabled'>
-            <option value='true'>通知する</option>
-            <option value='false'>通知しない</option>
-        </select><br>
-        <label>銘柄リスト（1行に1銘柄）</label><br>
-        <textarea name='symbols' rows='10' cols='30'></textarea><br>
-        <label>通知先メールアドレス</label><input type='email' name='email'><br>
-        <label>送信用Gmailアドレス</label><input type='email' name='smtp_email'><br>
-        <label>アプリパスワード</label><input type='password' name='smtp_password'><br>
-        <input type='submit'>
-    </form>"""
-    if request.method == "POST":
-        user = current_user
-        user.email = request.form["email"]
-        user.smtp_email = request.form["smtp_email"]
-        user.smtp_password = fernet.encrypt(request.form["smtp_password"].encode()).decode()
-        user.symbols = request.form["symbols"]
-        user.notify_enabled = request.form.get("notify_enabled") == "true"
-        db.session.commit()
-        return redirect(url_for("register"))
-    return render_template_string(html)
+# 管理者専用アクセス用デコレーター
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != "admin":
+            abort(403)
+        return f(*args, **kwargs)
+    return wrapper
+
+@app.route("/")
+def home():
+    return """
+    <h1>ようこそ！cross-notifierへ</h1>
+    <p><a href='/login'>ログイン</a></p>
+    """
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")  # ログイン試行制限
 def login():
     html = """
-    <h1>ログインページ（仮）</h1>
+    <h1>ログイン</h1>
     <form method='POST'>
-        <input name='username'><br>
-        <input name='password' type='password'><br>
-        <input type='submit'>
-    </form>"""
+        ユーザー名：<input name='username'><br>
+        パスワード：<input name='password' type='password'><br>
+        <input type='submit' value='ログイン'>
+    </form>
+    """
     if request.method == "POST":
         user = User.query.filter_by(username=request.form["username"]).first()
         if user and check_password_hash(user.password_hash, request.form["password"]):
             login_user(user)
-            return redirect(url_for("register"))
+            return redirect("/mypage")
     return render_template_string(html)
 
 @app.route("/logout")
+@login_required
 def logout():
     logout_user()
-    return redirect("/login")
+    return redirect("/")
 
-@app.route("/")
-def home():
-    return "<h1>ようこそ！cross-notifierへ</h1><p><a href='/login'>ログインはこちら</a></p>"
+@app.route("/mypage")
+@login_required
+def mypage():
+    return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
 
-    
+@app.route("/register", methods=["GET", "POST"])
+@admin_required
+def register():
+    html = """
+    <h1>新規ユーザー登録（管理者専用）</h1>
+    <form method='POST'>
+        ユーザー名：<input name='username'><br>
+        パスワード：<input name='password' type='password'><br>
+        権限：<select name='role'>
+            <option value='user'>一般ユーザー</option>
+            <option value='admin'>管理者</option>
+        </select><br>
+        <input type='submit' value='登録'>
+    </form>
+    """
+    if request.method == "POST":
+        username = request.form["username"]
+        password = generate_password_hash(request.form["password"])
+        role = request.form.get("role", "user")
+        new_user = User(username=username, password_hash=password, role=role)
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect("/mypage")
+    return render_template_string(html)
+
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))  # Renderが使うPORT環境変数を取得
+    with app.app_context():
+        db.create_all()
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

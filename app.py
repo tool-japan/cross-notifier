@@ -96,6 +96,7 @@ def register():
         new_user = User(username=username, password_hash=password, role=role)
         db.session.add(new_user)
         db.session.commit()
+        login_user(new_user)
         return redirect("/mypage")
     return render_template_string(html)
 

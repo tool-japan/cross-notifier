@@ -15,7 +15,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 
-# Flask-Limiter（ログイン制限）
+# Flask-Limiter（ログイン試行制限）
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
 
 # User Model
@@ -99,6 +99,11 @@ def register():
         login_user(new_user)
         return redirect("/mypage")
     return render_template_string(html)
+
+@app.route("/users")
+def show_users():
+    users = User.query.all()
+    return "<h2>登録済みユーザー一覧</h2><ul>" + "".join([f"<li>{u.username} - {u.role}</li>" for u in users]) + "</ul>"
 
 if __name__ == "__main__":
     with app.app_context():

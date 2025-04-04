@@ -5,3 +5,4 @@ cryptography
 pandas
 yfinance
 psycopg2-binary
+flask_limiter

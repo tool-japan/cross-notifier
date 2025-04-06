@@ -98,8 +98,11 @@ def main_loop():
                     body = "\n".join(msgs)
                     pw = fernet.decrypt(user.smtp_password.encode()).decode()
                     send_email(user.smtp_email, pw, user.email, "【クロス検出通知】", body)
-            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...", flush=True)
-            time.sleep(300)
+            # ✅ ここに追加！
+            print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
+            total_checked = sum(len(symbols) for _, symbols in user_map.items())
+            print(f"{datetime.now()} - クロス判定対象: {total_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
 if __name__ == "__main__":
     main_loop()

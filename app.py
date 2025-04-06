@@ -31,6 +31,12 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(300), nullable=False)
     role = db.Column(db.String(10), default="user")  # "admin" or "user"
 
+    email = db.Column(db.String(255), nullable=True)              # 通知先メールアドレス
+    symbols = db.Column(db.Text, nullable=True)                   # 銘柄リスト（改行区切り）
+    smtp_email = db.Column(db.String(255), nullable=True)         # 送信元Gmail
+    smtp_password = db.Column(db.Text, nullable=True)             # Gmailアプリパスワード（暗号化）
+    notify_enabled = db.Column(db.Boolean, default=True)          # 通知ON/OFF
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))

@@ -70,7 +70,7 @@ def logout():
 
 # 登録画面（仮）
 @app.route("/register", methods=["GET", "POST"])
-@login_required
+# @login_required
 def register():
     html = """
     <h1>新規ユーザー登録（管理者専用）</h1>

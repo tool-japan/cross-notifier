@@ -28,7 +28,7 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200/day", "50/ho
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
-    password_hash = db.Column(db.String(100), nullable=False)
+    password_hash = db.Column(db.String(300), nullable=False)
     role = db.Column(db.String(10), default="user")  # "admin" or "user"
 
 @login_manager.user_loader

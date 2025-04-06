@@ -60,6 +60,14 @@ def detect_cross(df, symbol):
     print(f"[{symbol}] クロスなし")
     return None
 
+def batch(iterable, size):
+    it = iter(iterable)
+    while True:
+        chunk = list(islice(it, size))
+        if not chunk:
+            break
+        yield chunk
+
 def main_loop():
     with app.app_context():
         while True:
@@ -73,14 +81,6 @@ def main_loop():
                 syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
                 user_map[u.id] = (u, syms)
                 all_symbols.update(syms)
-
-            def batch(iterable, size):
-                it = iter(iterable)
-                while True:
-                    chunk = list(islice(it, size))
-                    if not chunk:
-                        break
-                    yield chunk
 
             cache = {}
             for batch_syms in batch(all_symbols, 10):
@@ -127,6 +127,6 @@ def main_loop():
 
             # テスト用で時間調整 time.sleep(300)
             time.sleep(100)
-            
+
 if __name__ == "__main__":
     main_loop()

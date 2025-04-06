@@ -66,7 +66,7 @@ def login():
         user = User.query.filter_by(username=request.form["username"]).first()
         if user and check_password_hash(user.password_hash, request.form["password"]):
             login_user(user)
-            return redirect("/mypage")
+            return redirect("/dashboard")
     return render_template_string(html)
 
 @app.route("/logout")
@@ -162,3 +162,18 @@ if __name__ == "__main__":
         # db.create_all() # ← テーブル作成
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    return f"""
+    <h1>{current_user.username}さんのダッシュボード</h1>
+    <p>ここからツールを操作できます！</p>
+    <ul>
+        <li><a href="/check_cross">📈 移動平均クロス検出</a></li>
+        <li><a href="/history">📜 通知履歴</a></li>
+        <li><a href="/mypage">🏠 マイページ</a></li>
+        <li><a href="/logout">🔓 ログアウト</a></li>
+    </ul>
+    """
+

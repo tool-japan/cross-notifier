@@ -14,6 +14,10 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
 
+from cryptography.fernet import Fernet
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
+fernet = Fernet(ENCRYPTION_KEY)
+
 # PostgreSQL URL優先（Render用）。なければSQLiteでローカル動作
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 

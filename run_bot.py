@@ -104,7 +104,7 @@ def main_loop():
             print(f"{datetime.now()} - クロス判定対象: {total_checked}銘柄", flush=True)
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-       time.sleep(300)
+            time.sleep(300)
 
 if __name__ == "__main__":
     main_loop()

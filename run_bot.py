@@ -124,7 +124,8 @@ def main_loop():
 
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-            time.sleep(300)
-
+            # テスト用で時間調整 time.sleep(300)
+            time.sleep(100)
+            
 if __name__ == "__main__":
     main_loop()

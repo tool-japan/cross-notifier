@@ -49,10 +49,15 @@ def detect_cross(df, symbol):
     df.loc[df["EMA9"] > df["EMA20"], "Signal"] = 1
     df.loc[df["EMA9"] < df["EMA20"], "Signal"] = -1
     df["Cross"] = df["Signal"].diff()
+
     if df["Cross"].iloc[-1] == 2:
+        print(f"[{symbol}] ゴールデンクロス検出")
         return f"{symbol} で ゴールデンクロス"
     elif df["Cross"].iloc[-1] == -2:
+        print(f"[{symbol}] デッドクロス検出")
         return f"{symbol} で デッドクロス"
+
+    print(f"[{symbol}] クロスなし")
     return None
 
 def main_loop():

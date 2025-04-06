@@ -4,8 +4,9 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# .env 読み込み
+# .env 読み込み（RenderではWebから環境変数登録する）
 load_dotenv()
 
 # Flask アプリ初期化
@@ -37,7 +38,7 @@ class User(UserMixin, db.Model):
 # ログイン時に呼び出されるユーザー取得関数
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 # ホーム画面
 @app.route("/")
@@ -49,14 +50,14 @@ def home():
 # ログイン
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    html = """<form method='POST'>
-    <input name='username'><br>
-    <input name='password' type='password'><br>
+    html = """<h1>ログインページ</h1><form method='POST'>
+    <input name='username' placeholder='ユーザー名'><br>
+    <input name='password' type='password' placeholder='パスワード'><br>
     <input type='submit' value='ログイン'>
     </form>"""
     if request.method == "POST":
         user = User.query.filter_by(username=request.form["username"]).first()
-        if user and user.password_hash == request.form["password"]:
+        if user and check_password_hash(user.password_hash, request.form["password"]):
             login_user(user)
             return redirect(url_for("register"))
     return render_template_string(html)
@@ -74,12 +75,12 @@ def register():
     html = """
     <h1>新規ユーザー登録（管理者専用）</h1>
     <form method='POST'>
-        <input name='email'><br>
-        <input name='smtp_email'><br>
-        <input name='smtp_password' type='password'><br>
-        <input name='symbols'><br>
-        <input type='checkbox' name='notify_enabled' value='true'>通知ON<br>
-        <input type='submit'>
+        <input name='email' placeholder='通知用メール'><br>
+        <input name='smtp_email' placeholder='SMTPログイン用メール'><br>
+        <input name='smtp_password' type='password' placeholder='SMTPパスワード'><br>
+        <input name='symbols' placeholder='通知銘柄 (例: AAPL,GOOG)'><br>
+        <label><input type='checkbox' name='notify_enabled' value='true'>通知ON</label><br>
+        <input type='submit' value='更新'>
     </form>
     """
     if request.method == "POST":
@@ -92,14 +93,6 @@ def register():
         db.session.commit()
         return redirect(url_for("register"))
     return render_template_string(html)
-
-# --- 登録などの route の下にこの行を追加 ---
-    # with app.app_context():
-    # db.create_all() ←(初期化完了済みのためコメントアウト)
-
-with app.app_context():
-    print(User.query.all())
-
 
 # Flask 実行
 if __name__ == "__main__":

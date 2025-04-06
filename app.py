@@ -1,112 +1,106 @@
-from flask import Flask, render_template_string, request, redirect, abort
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import os
-from functools import wraps
+from flask import Flask, request, redirect, render_template_string, url_for
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from cryptography.fernet import Fernet
+from dotenv import load_dotenv
 
+# Load .env
+load_dotenv()
+
+# Flask App
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "devkey")
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "fallback_secret_key")
 
-# DB & Login
+# PostgreSQL Config
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
-login_manager = LoginManager(app)
 
-# Flask-Limiter（ログイン試行制限）
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+# Fernet Encryptor
+fernet = Fernet(os.environ.get("ENCRYPTION_KEY"))
 
-# User Model
-class User(db.Model, UserMixin):
+# Flask-Login Setup
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+# --- Models ---
+class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password_hash = db.Column(db.String(100), nullable=False)
-    role = db.Column(db.String(10), default="user")  # "admin" or "user"
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120))
+    smtp_email = db.Column(db.String(120))
+    smtp_password = db.Column(db.Text)
+    symbols = db.Column(db.Text)
+    notify_enabled = db.Column(db.Boolean, default=False)
+    is_admin = db.Column(db.Boolean, default=False)
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# 管理者専用アクセス用デコレーター
-def admin_required(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            abort(403)
-        return f(*args, **kwargs)
-    return wrapper
-
+# --- Routes ---
 @app.route("/")
 def home():
-    return """
-    <h1>ようこそ！cross-notifierへ</h1>
-    <p><a href='/login'>ログイン</a></p>
-    """
+    if current_user.is_authenticated:
+        return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
+    return "<h1>ようこそ！cross-notifierへ</h1><p><a href='/login'>ログインはこちら</a></p>"
 
 @app.route("/login", methods=["GET", "POST"])
-@limiter.limit("5 per minute")  # ログイン試行制限
 def login():
-    html = """
-    <h1>ログイン</h1>
-    <form method='POST'>
-        ユーザー名：<input name='username'><br>
-        パスワード：<input name='password' type='password'><br>
-        <input type='submit' value='ログイン'>
-    </form>
-    """
+    html = """<h1>ログインページ（仮）</h1><form method='POST'>
+    <input name='username'><br>
+    <input name='password' type='password'><br>
+    <input type='submit' value='送信'></form>"""
     if request.method == "POST":
         user = User.query.filter_by(username=request.form["username"]).first()
-        if user and check_password_hash(user.password_hash, request.form["password"]):
+        if user and user.password_hash == request.form["password"]:  # ← 本番ではハッシュチェックに変更してね！
             login_user(user)
-            return redirect("/mypage")
+            return redirect(url_for("mypage"))
     return render_template_string(html)
 
 @app.route("/logout")
-@login_required
 def logout():
     logout_user()
     return redirect("/")
+
+@app.route("/register", methods=["GET", "POST"])
+# @admin_required  ← 一時的にコメントアウト
+@login_required
+def register():
+    html = """<h1>新規ユーザー登録（管理者専用）</h1>
+    <form method='POST'>
+    <input name='email' placeholder='通知先Email'><br>
+    <input name='smtp_email'><br>
+    <input name='smtp_password' type='password'><br>
+    <input name='symbols' placeholder='銘柄リスト'><br>
+    <label>通知ON <input type='checkbox' name='notify_enabled' value='true'></label><br>
+    <input type='submit'></form>"""
+    if request.method == "POST":
+        user = current_user
+        user.email = request.form["email"]
+        user.smtp_email = request.form["smtp_email"]
+        user.smtp_password = fernet.encrypt(request.form["smtp_password"].encode()).decode()
+        user.symbols = request.form["symbols"]
+        user.notify_enabled = request.form.get("notify_enabled") == "true"
+        db.session.commit()
+        return redirect(url_for("register"))
+    return render_template_string(html)
 
 @app.route("/mypage")
 @login_required
 def mypage():
     return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
 
-@app.route("/register", methods=["GET", "POST"])
-# @admin_required
-def register():
-    html = """
-    <h1>新規ユーザー登録（管理者専用）</h1>
-    <form method='POST'>
-        ユーザー名：<input name='username'><br>
-        パスワード：<input name='password' type='password'><br>
-        権限：<select name='role'>
-            <option value='user'>一般ユーザー</option>
-            <option value='admin'>管理者</option>
-        </select><br>
-        <input type='submit' value='登録'>
-    </form>
-    """
-    if request.method == "POST":
-        username = request.form["username"]
-        password = generate_password_hash(request.form["password"])
-        role = request.form.get("role", "user")
-        new_user = User(username=username, password_hash=password, role=role)
-        db.session.add(new_user)
-        db.session.commit()
-        login_user(new_user)
-        return redirect("/mypage")
-    return render_template_string(html)
-
 @app.route("/users")
-def show_users():
-    users = User.query.all()
-    return "<h2>登録済みユーザー一覧</h2><ul>" + "".join([f"<li>{u.username} - {u.role}</li>" for u in users]) + "</ul>"
+@login_required
+def users():
+    all_users = User.query.all()
+    user_list = "<br>".join(f"{u.username} - {'admin' if u.is_admin else 'user'}" for u in all_users)
+    return f"<h1>登録ユーザー一覧</h1><p>{user_list}</p>"
 
+# --- Main ---
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

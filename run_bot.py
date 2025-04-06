@@ -56,7 +56,7 @@ def detect_cross(df, symbol):
 
 def main_loop():
     with app.app_context(): 
-        db.create_all()  # ← これを追加！
+        # db.create_all()  # 初期デバッグ用。今は不要
         while True:
             print("ループ実行:", datetime.now())
             users = User.query.filter_by(notify_enabled=True).all()

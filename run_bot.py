@@ -8,6 +8,7 @@ from flask_sqlalchemy import SQLAlchemy
 from cryptography.fernet import Fernet
 from datetime import datetime
 import os
+from itertools import islice  # ← これをファイルの先頭あたりに追記
   
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
@@ -67,11 +68,24 @@ def main_loop():
                 user_map[u.id] = (u, syms)
                 all_symbols.update(syms)
 
+            def batch(iterable, size):
+              it = iter(iterable)
+              while True:
+                  chunk = list(islice(it, size))
+                  if not chunk:
+                      break
+                  yield chunk
+
+          # ダウンロード（10銘柄ずつ処理）
             cache = {}
-            for sym in all_symbols:
-                df = yf.download(sym, period="5d", interval="5m")
-                if not df.empty:
-                    cache[sym] = df
+            for batch_syms in batch(all_symbols, 10):
+                for sym in batch_syms:
+                    try:
+                        df = yf.download(sym, period="5d", interval="5m")
+                        if not df.empty:
+                            cache[sym] = df
+                    except Exception as e:
+                        print(f"エラー（{sym}）: {e}")
 
             for uid, (user, symbols) in user_map.items():
                 msgs = []

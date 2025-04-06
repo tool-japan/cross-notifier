@@ -116,7 +116,11 @@ def main_loop():
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
-            total_checked = sum(len(symbols) for _, symbols in user_map.items())
+
+            actual_checked = sum(
+                1 for _, (_, symbols) in user_map.items() for sym in symbols if sym in cache
+            )
+            print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
 
             # ✅ 実際にクロス判定した銘柄数（キャッシュにあるもののみ）
             actual_checked = sum(1 for _, symbols in user_map.items() for sym in symbols if sym in cache)

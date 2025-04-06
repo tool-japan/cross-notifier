@@ -4,21 +4,27 @@ from flask_login import LoginManager, login_user, login_required, logout_user, U
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from dotenv import load_dotenv
 import os
 from functools import wraps
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "devkey")
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+# 環境変数の読み込み（Renderでは自動、ローカルで使う場合は必要）
+load_dotenv()
 
-# DB & Login
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
+
+# PostgreSQL URL優先（Render用）。なければSQLiteでローカル動作
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
+
+# DB & ログイン
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 
-# Flask-Limiter（ログイン試行制限）
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+# ログイン試行制限（DoS対策）
+limiter = Limiter(get_remote_address, app=app, default_limits=["200/day", "50/hour"])
 
-# User Model
+# ユーザーモデル
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
@@ -29,7 +35,7 @@ class User(db.Model, UserMixin):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# 管理者専用アクセス用デコレーター
+# 管理者だけアクセスできるデコレーター
 def admin_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -42,18 +48,18 @@ def admin_required(f):
 def home():
     return """
     <h1>ようこそ！cross-notifierへ</h1>
-    <p><a href='/login'>ログイン</a></p>
+    <p><a href='/login'>ログインはこちら</a></p>
     """
 
 @app.route("/login", methods=["GET", "POST"])
-@limiter.limit("5 per minute")  # ログイン試行制限
+@limiter.limit("5/minute")  # 総当たり攻撃対策
 def login():
     html = """
-    <h1>ログイン</h1>
+    <h1>ログインページ（仮）</h1>
     <form method='POST'>
         ユーザー名：<input name='username'><br>
         パスワード：<input name='password' type='password'><br>
-        <input type='submit' value='ログイン'>
+        <input type='submit' value='送信'>
     </form>
     """
     if request.method == "POST":
@@ -75,7 +81,7 @@ def mypage():
     return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
 
 @app.route("/register", methods=["GET", "POST"])
-# @admin_required
+# @admin_required  ← 必要に応じてON（開発時はコメントアウト可）
 def register():
     html = """
     <h1>新規ユーザー登録（管理者専用）</h1>
@@ -101,6 +107,7 @@ def register():
     return render_template_string(html)
 
 @app.route("/users")
+@admin_required
 def show_users():
     users = User.query.all()
     return "<h2>登録済みユーザー一覧</h2><ul>" + "".join([f"<li>{u.username} - {u.role}</li>" for u in users]) + "</ul>"

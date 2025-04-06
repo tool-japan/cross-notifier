@@ -86,8 +86,8 @@ def main_loop():
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
                     try:
-                        # テスト用で時間調整 df = yf.download(sym, period="5d", interval="5m")
-                        df = yf.download(sym, period="20d", interval="1d")
+                        df = yf.download(sym, period="5d", interval="5m")
+                        # テスト用で時間調整 df = yf.download(sym, period="20d", interval="1d")
                         if not df.empty:
                             cache[sym] = df
                     except Exception as e:
@@ -125,8 +125,8 @@ def main_loop():
 
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-            # テスト用で時間調整 time.sleep(300)
-            time.sleep(100)
+            time.sleep(300)
+            # テスト用で時間調整 time.sleep(100)
 
 if __name__ == "__main__":
     main_loop()

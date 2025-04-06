@@ -117,6 +117,11 @@ def main_loop():
 
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
             total_checked = sum(len(symbols) for _, symbols in user_map.items())
+
+            # ✅ 実際にクロス判定した銘柄数（キャッシュにあるもののみ）
+            actual_checked = sum(1 for _, symbols in user_map.items() for sym in symbols if sym in cache)
+            print(f"{datetime.now()} - クロス判定実行数（実データあり）: {actual_checked}銘柄", flush=True)
+          
             print(f"{datetime.now()} - クロス判定対象: {total_checked}銘柄", flush=True)
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 

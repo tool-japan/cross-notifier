@@ -35,7 +35,7 @@ class User(UserMixin, db.Model):
     notify_enabled = db.Column(db.Boolean, default=False)
     is_admin = db.Column(db.Boolean, default=False)
 
-# ログイン時に呼び出されるユーザー取得関数
+# ユーザー取得関数
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
@@ -68,7 +68,7 @@ def logout():
     logout_user()
     return redirect("/login")
 
-# 登録画面（仮）※セキュリティ強化はあとで！
+# 登録画面（仮）
 @app.route("/register", methods=["GET", "POST"])
 @login_required
 def register():
@@ -94,7 +94,17 @@ def register():
         return redirect(url_for("register"))
     return render_template_string(html)
 
-# Flask 実行
+# 登録ユーザー確認ページ（開発用）
+@app.route("/users")
+def show_users():
+    users = User.query.all()
+    html = "<h1>登録済みユーザー一覧</h1><ul>"
+    for user in users:
+        html += f"<li>{user.username} - {'admin' if user.is_admin else 'user'} - password: {user.password_hash}</li>"
+    html += "</ul>"
+    return html
+
+# アプリ起動
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

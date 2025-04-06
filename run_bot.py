@@ -98,6 +98,7 @@ def main_loop():
                     body = "\n".join(msgs)
                     pw = fernet.decrypt(user.smtp_password.encode()).decode()
                     send_email(user.smtp_email, pw, user.email, "【クロス検出通知】", body)
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...", flush=True)
             time.sleep(300)
 
 if __name__ == "__main__":

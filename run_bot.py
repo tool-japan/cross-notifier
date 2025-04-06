@@ -9,6 +9,9 @@ from cryptography.fernet import Fernet
 from datetime import datetime
 import os
 
+with app.app_context():
+    db.create_all()
+    
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")

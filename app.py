@@ -104,6 +104,10 @@ def show_users():
     html += "</ul>"
     return html
 
+# --- この行を追加！ ---
+with app.app_context():
+    db.create_all()
+
 # アプリ起動
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

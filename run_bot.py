@@ -8,8 +8,8 @@ from flask_sqlalchemy import SQLAlchemy
 from cryptography.fernet import Fernet
 from datetime import datetime
 import os
-from itertools import islice  # ← これをファイルの先頭あたりに追記
-  
+from itertools import islice
+
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
@@ -61,15 +61,14 @@ def detect_cross(df, symbol):
     return None
 
 def main_loop():
-    with app.app_context(): 
+    with app.app_context():
         while True:
             print("ループ実行:", datetime.now())
-            
+
             users = User.query.filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
 
-            # ✅ 正しくユーザーごとの銘柄リストを構築
             for u in users:
                 syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
                 user_map[u.id] = (u, syms)
@@ -83,7 +82,6 @@ def main_loop():
                         break
                     yield chunk
 
-            # ダウンロード（10銘柄ずつ処理）
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
@@ -94,12 +92,11 @@ def main_loop():
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
-            # ⚠️ 取得失敗銘柄をログに出す
             failed_symbols = [sym for sym in all_symbols if sym not in cache]
             if failed_symbols:
                 print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
 
-            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")  
+            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
@@ -119,14 +116,12 @@ def main_loop():
 
             actual_checked = sum(
                 1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache
-            )      
+            )
             print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
 
-            # ✅ 実際にクロス判定した銘柄数（キャッシュにあるもののみ）
-            actual_checked = sum(1 for _, symbols in user_map.items() for sym in symbols if sym in cache)
-            print(f"{datetime.now()} - クロス判定実行数（実データあり）: {actual_checked}銘柄", flush=True)
-          
-            print(f"{datetime.now()} - クロス判定対象: {total_checked}銘柄", flush=True)
+            total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
+            print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
+
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
             time.sleep(300)

@@ -68,10 +68,24 @@ def main_loop():
             users = User.query.filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
-            for u in users:
-                syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
-                user_map[u.id] = (u, syms)
-                all_symbols.update(syms)
+            for uid, (user, symbols) in user_map.items():
+                msgs = []
+                for sym in symbols:
+                    if sym in cache:
+                        print(f"[{sym}] クロス判定開始")
+                        msg = detect_cross(cache[sym].copy(), sym)
+                        if msg:
+                            print(f"[{sym}] クロス検出 → {msg}")
+                            msgs.append(msg)
+                        else:
+                            print(f"[{sym}] クロスなし")
+                    else:
+                        print(f"[{sym}] データ未取得（キャッシュなし）")
+
+                if msgs:
+                    body = "\n".join(msgs)
+                    pw = fernet.decrypt(user.smtp_password.encode()).decode()
+                    send_email(user.smtp_email, pw, user.email, "【クロス検出通知】", body)
 
             def batch(iterable, size):
               it = iter(iterable)

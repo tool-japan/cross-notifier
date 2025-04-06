@@ -113,8 +113,8 @@ def show_users():
     return "<h2>登録済みユーザー一覧</h2><ul>" + "".join([f"<li>{u.username} - {u.role}</li>" for u in users]) + "</ul>"
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.drop_all()   # ← 一時的に追加（既存テーブルを削除）
-        db.create_all() # ← テーブル作成
+    # with app.app_context():
+        # db.drop_all()   # ← 一時的に追加（既存テーブルを削除）
+        # db.create_all() # ← テーブル作成
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

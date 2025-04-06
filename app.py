@@ -229,6 +229,16 @@ def show_my_info():
     <p><a href='/dashboard'>← ダッシュボードに戻る</a></p>
     """
 
+@app.route("/debug_users")
+@admin_required
+def debug_users():
+    users = User.query.all()
+    html = "<h1>DBに保存されているユーザー情報</h1><ul>"
+    for u in users:
+        html += f"<li><strong>{u.username}</strong><br>通知ON: {u.notify_enabled}<br>銘柄リスト:<pre>{u.symbols}</pre></li><br>"
+    html += "</ul>"
+    return html
+
 
 
 if __name__ == "__main__":

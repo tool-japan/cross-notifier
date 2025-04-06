@@ -94,8 +94,12 @@ def register():
     return render_template_string(html)
 
 # --- 登録などの route の下にこの行を追加 ---
+    # with app.app_context():
+    # db.create_all() ←(初期化完了済みのためコメントアウト)
+
 with app.app_context():
-    db.create_all()
+    print(User.query.all())
+
 
 # Flask 実行
 if __name__ == "__main__":

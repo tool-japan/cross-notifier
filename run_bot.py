@@ -105,8 +105,10 @@ def main_loop():
                             cache[sym] = df
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
-
+            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")  
+                      
             for uid, (user, symbols) in user_map.items():
+                print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
                 for sym in symbols:
                     if sym in cache:

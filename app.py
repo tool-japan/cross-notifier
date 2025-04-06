@@ -110,7 +110,44 @@ def register():
 @admin_required
 def show_users():
     users = User.query.all()
-    return "<h2>登録済みユーザー一覧</h2><ul>" + "".join([f"<li>{u.username} - {u.role}</li>" for u in users]) + "</ul>"
+    html = "<h2>登録済みユーザー一覧</h2><ul>"
+    for u in users:
+        html += f"""
+        <li>{u.username} - {u.role}
+            <a href='/delete_user/{u.id}'>🗑削除</a>
+            <a href='/change_password/{u.id}'>🔑パスワード変更</a>
+        </li>
+        """
+    html += "</ul>"
+    return html
+
+@app.route("/delete_user/<int:user_id>")
+@admin_required
+def delete_user(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.username == "admin":
+        return "管理者ユーザーは削除できません", 403
+    db.session.delete(user)
+    db.session.commit()
+    return redirect("/users")
+
+@app.route("/change_password/<int:user_id>", methods=["GET", "POST"])
+@admin_required
+def change_password(user_id):
+    user = User.query.get_or_404(user_id)
+    if request.method == "POST":
+        new_password = request.form["new_password"]
+        user.password_hash = generate_password_hash(new_password)
+        db.session.commit()
+        return redirect("/users")
+    
+    return render_template_string(f"""
+        <h1>{user.username} のパスワード変更</h1>
+        <form method='POST'>
+            新しいパスワード：<input name='new_password' type='password'><br>
+            <input type='submit' value='変更'>
+        </form>
+    """)
 
 if __name__ == "__main__":
     # with app.app_context():

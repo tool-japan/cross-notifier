@@ -205,6 +205,27 @@ def dashboard():
     """
     return render_template_string(html)
 
+@app.route("/me")
+@login_required
+def show_my_info():
+    try:
+        decrypted_pw = fernet.decrypt(current_user.smtp_password.encode()).decode()
+    except Exception:
+        decrypted_pw = "(復号失敗)"
+
+    return f"""
+    <h1>現在の通知設定</h1>
+    <ul>
+        <li>通知ON: {'✅ 有効' if current_user.notify_enabled else '❌ 無効'}</li>
+        <li>銘柄リスト:<pre>{current_user.symbols or '(未設定)'}</pre></li>
+        <li>通知先メール: {current_user.email or '(未設定)'}</li>
+        <li>送信元Gmail: {current_user.smtp_email or '(未設定)'}</li>
+        <li>アプリパスワード: {decrypted_pw}</li>
+    </ul>
+    <p><a href='/dashboard'>← ダッシュボードに戻る</a></p>
+    """
+
+
 
 if __name__ == "__main__":
     # with app.app_context():

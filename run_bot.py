@@ -98,6 +98,8 @@ def main_loop():
                     body = "\n".join(msgs)
                     pw = fernet.decrypt(user.smtp_password.encode()).decode()
                     send_email(user.smtp_email, pw, user.email, "【クロス検出通知】", body)
+                    print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
+                  
             # ✅ ここに追加！
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
             total_checked = sum(len(symbols) for _, symbols in user_map.items())

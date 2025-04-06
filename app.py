@@ -201,8 +201,8 @@ def dashboard():
 
 
 if __name__ == "__main__":
-    # with app.app_context():
-        # db.drop_all()   # ← 一時的に追加（既存テーブルを削除）
-        # db.create_all() # ← テーブル作成
+    with app.app_context():
+        db.drop_all()   # ← 一時的に追加（既存テーブルを削除）
+        db.create_all() # ← テーブル作成
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

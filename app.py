@@ -114,7 +114,7 @@ def show_users():
     for u in users:
         html += f"""
         <li>{u.username} - {u.role}
-            <a href='/delete_user/{u.id}'>🗑削除</a>
+            <a href='/delete_user/{u.id}' onclick="return confirm('本当に削除しますか？');">🗑削除</a>
             <a href='/change_password/{u.id}'>🔑パスワード変更</a>
         </li>
         """
@@ -125,8 +125,15 @@ def show_users():
 @admin_required
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
+
+    # 自分自身の削除を防止
+    if user.id == current_user.id:
+        return "自分自身のアカウントは削除できません", 403
+
+    # 必要に応じて特定ユーザー（例: admin）保護
     if user.username == "admin":
-        return "管理者ユーザーは削除できません", 403
+        return "adminユーザーは削除できません", 403
+
     db.session.delete(user)
     db.session.commit()
     return redirect("/users")

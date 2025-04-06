@@ -156,19 +156,48 @@ def change_password(user_id):
         </form>
     """)
 
-@app.route("/dashboard")
+@app.route("/dashboard", methods=["GET", "POST"])
 @login_required
 def dashboard():
-    return f"""
-    <h1>{current_user.username}さんのダッシュボード</h1>
-    <p>ここからツールを操作できます！</p>
-    <ul>
-        <li><a href="/check_cross">📈 移動平均クロス検出</a></li>
-        <li><a href="/history">📜 通知履歴</a></li>
-        <li><a href="/mypage">🏠 マイページ</a></li>
-        <li><a href="/logout">🔓 ログアウト</a></li>
-    </ul>
+    if request.method == "POST":
+        current_user.notify_enabled = "notify" in request.form
+        current_user.symbols = request.form["symbols"]
+        current_user.email = request.form["email"]
+        current_user.smtp_email = request.form["smtp_email"]
+
+        # パスワード欄が空でなければ更新
+        new_smtp_pw = request.form["smtp_password"]
+        if new_smtp_pw:
+            encrypted_pw = fernet.encrypt(new_smtp_pw.encode()).decode()
+            current_user.smtp_password = encrypted_pw
+
+        db.session.commit()
+        return redirect("/dashboard")
+
+    # 表示用に複合化
+    try:
+        decrypted_pw = fernet.decrypt(current_user.smtp_password.encode()).decode()
+    except Exception:
+        decrypted_pw = ""
+
+    html = f"""
+    <h1>通知設定ダッシュボード</h1>
+    <form method="POST">
+        🔘 通知ON：<input type="checkbox" name="notify" {"checked" if current_user.notify_enabled else ""}><br><br>
+        📈 銘柄リスト（1行1銘柄）：<br>
+        <textarea name="symbols" rows="10" cols="30">{current_user.symbols or ""}</textarea><br><br>
+        📩 通知先メールアドレス：<br>
+        <input name="email" value="{current_user.email or ''}"><br><br>
+        ✉️ 送信用Gmailアドレス：<br>
+        <input name="smtp_email" value="{current_user.smtp_email or ''}"><br><br>
+        🔐 アプリパスワード（変更時のみ入力）：<br>
+        <input type="password" name="smtp_password" value=""><br><br>
+        <input type="submit" value="保存">
+    </form>
+    <br>
+    <a href="/mypage">← マイページに戻る</a>
     """
+    return render_template_string(html)
 
 
 if __name__ == "__main__":

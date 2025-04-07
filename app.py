@@ -203,5 +203,10 @@ def debug_users():
     return html
 
 if __name__ == "__main__":
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+    print("✅ データベース初期化が完了しました。")
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

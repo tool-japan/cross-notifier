@@ -138,7 +138,7 @@ def main_loop():
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
             Session.remove()
-            time.sleep(300)  # 本番運用では5分間隔
+            time.sleep(100)  # 本番運用では5分間隔
 
 if __name__ == "__main__":
     main_loop()

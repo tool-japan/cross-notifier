@@ -14,10 +14,6 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
 
-from cryptography.fernet import Fernet
-ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
-fernet = Fernet(ENCRYPTION_KEY)
-
 # PostgreSQL URL優先（Render用）。なければSQLiteでローカル動作
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 
@@ -28,17 +24,14 @@ login_manager = LoginManager(app)
 # ログイン試行制限（DoS対策）
 limiter = Limiter(get_remote_address, app=app, default_limits=["200/day", "50/hour"])
 
-# ユーザーモデル
+# ユーザーモデル（SES送信なのでsmtp情報は不要）
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password_hash = db.Column(db.String(300), nullable=False)
     role = db.Column(db.String(10), default="user")  # "admin" or "user"
-
     email = db.Column(db.String(255), nullable=True)              # 通知先メールアドレス
     symbols = db.Column(db.Text, nullable=True)                   # 銘柄リスト（改行区切り）
-    smtp_email = db.Column(db.String(255), nullable=True)         # 送信元Gmail
-    smtp_password = db.Column(db.Text, nullable=True)             # Gmailアプリパスワード（暗号化）
     notify_enabled = db.Column(db.Boolean, default=True)          # 通知ON/OFF
 
 @login_manager.user_loader
@@ -91,7 +84,7 @@ def mypage():
     return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
 
 @app.route("/register", methods=["GET", "POST"])
-# @admin_required  ← 必要に応じてON（開発時はコメントアウト可）
+# @admin_required
 def register():
     html = """
     <h1>新規ユーザー登録（管理者専用）</h1>
@@ -135,15 +128,10 @@ def show_users():
 @admin_required
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
-
-    # 自分自身の削除を防止
     if user.id == current_user.id:
         return "自分自身のアカウントは削除できません", 403
-
-    # 必要に応じて特定ユーザー（例: admin）保護
     if user.username == "admin":
         return "adminユーザーは削除できません", 403
-
     db.session.delete(user)
     db.session.commit()
     return redirect("/users")
@@ -173,22 +161,8 @@ def dashboard():
         current_user.notify_enabled = "notify" in request.form
         current_user.symbols = request.form["symbols"]
         current_user.email = request.form["email"]
-        current_user.smtp_email = request.form["smtp_email"]
-
-        # パスワード欄が空でなければ更新
-        new_smtp_pw = request.form["smtp_password"]
-        if new_smtp_pw:
-            encrypted_pw = fernet.encrypt(new_smtp_pw.encode()).decode()
-            current_user.smtp_password = encrypted_pw
-
         db.session.commit()
         return redirect("/dashboard")
-
-    # 表示用に複合化
-    try:
-        decrypted_pw = fernet.decrypt(current_user.smtp_password.encode()).decode()
-    except Exception:
-        decrypted_pw = ""
 
     html = f"""
     <h1>通知設定ダッシュボード</h1>
@@ -198,10 +172,6 @@ def dashboard():
         <textarea name="symbols" rows="10" cols="30">{current_user.symbols or ""}</textarea><br><br>
         📩 通知先メールアドレス：<br>
         <input name="email" value="{current_user.email or ''}"><br><br>
-        ✉️ 送信用Gmailアドレス：<br>
-        <input name="smtp_email" value="{current_user.smtp_email or ''}"><br><br>
-        🔐 アプリパスワード（変更時のみ入力）：<br>
-        <input type="password" name="smtp_password" value=""><br><br>
         <input type="submit" value="保存">
     </form>
     <br>
@@ -218,8 +188,6 @@ def show_my_info():
         <li>通知ON: {'✅ 有効' if current_user.notify_enabled else '❌ 無効'}</li>
         <li>銘柄リスト:<pre>{current_user.symbols or '(未設定)'}</pre></li>
         <li>通知先メール: {current_user.email or '(未設定)'}</li>
-        <li>送信元Gmail: {current_user.smtp_email or '(未設定)'}</li>
-        <li>アプリパスワード: （セキュリティのため非表示）</li>
     </ul>
     <p><a href='/dashboard'>← ダッシュボードに戻る</a></p>
     """
@@ -234,11 +202,6 @@ def debug_users():
     html += "</ul>"
     return html
 
-
-
 if __name__ == "__main__":
-    # with app.app_context():
-        # db.drop_all()   # ← 一時的に追加（既存テーブルを削除）
-        # db.create_all() # ← テーブル作成
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

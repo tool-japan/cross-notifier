@@ -32,15 +32,16 @@ class User(db.Model):
     email = db.Column(db.String(255), nullable=False)
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
+    role = db.Column(db.String(10), default="user")  # ← admin識別のため追加
 
 class NotificationHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
     symbol = db.Column(db.String(20), nullable=False)
-    cross_type = db.Column(db.String(10), nullable=False)  # "golden" or "dead"
+    cross_type = db.Column(db.String(10), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-# メール送信関数（SES）
+# メール送信
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
@@ -82,7 +83,7 @@ def batch(iterable, size):
             break
         yield chunk
 
-# メインループ
+# メイン処理ループ
 def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
@@ -91,17 +92,24 @@ def main_loop():
             print("ループ実行:", datetime.now())
             db_session = Session()
 
-            # 全ユーザーの銘柄をまとめて取得
             users = db_session.query(User).filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
 
-            for u in users:
-                syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
-                user_map[u.id] = (u, syms)
-                all_symbols.update(syms)
+            # 管理者銘柄の取得（全ユーザーに適用）
+            admin_symbols = set()
+            for admin in users:
+                if admin.role == "admin":
+                    admin_symbols.update([s.strip() for s in admin.symbols.splitlines() if s.strip()])
 
-            # 株価データ取得
+            for u in users:
+                user_symbols = set([s.strip() for s in u.symbols.splitlines() if s.strip()])
+                if u.role != "admin":
+                    user_symbols.update(admin_symbols)
+                user_map[u.id] = (u, list(user_symbols))
+                all_symbols.update(user_symbols)
+
+            # データ取得
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
@@ -114,7 +122,6 @@ def main_loop():
 
             print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
-            # 各ユーザーへ通知
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
@@ -126,7 +133,6 @@ def main_loop():
                     if not cross_type:
                         continue
 
-                    # 10分以内に同一の通知がされていないか確認
                     ten_min_ago = datetime.utcnow() - timedelta(minutes=10)
                     recent = db_session.query(NotificationHistory).filter_by(
                         user_id=uid, symbol=sym, cross_type=cross_type
@@ -136,7 +142,6 @@ def main_loop():
                         print(f"{sym} は直近10分以内に {cross_type} 通知済み → スキップ")
                         continue
 
-                    # 通知登録
                     db_session.add(NotificationHistory(user_id=uid, symbol=sym, cross_type=cross_type))
                     msgs.append(f"{sym} で {'ゴールデンクロス' if cross_type == 'golden' else 'デッドクロス'}")
 

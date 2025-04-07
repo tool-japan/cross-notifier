@@ -5,29 +5,27 @@ import smtplib
 from email.mime.text import MIMEText
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import scoped_session, sessionmaker
 from cryptography.fernet import Fernet
 from datetime import datetime
 import os
 from itertools import islice
+from sqlalchemy.orm import scoped_session, sessionmaker
 
-# 環境変数からSES情報を取得
+# SES用 環境変数
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
 
+# Flask & DB初期化
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 db = SQLAlchemy(app)
 
-# Fernet鍵取得
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
 fernet = Fernet(ENCRYPTION_KEY)
 
-# SQLAlchemyセッションのscoped_sessionで強制的に毎回DBを読み直す
-Session = scoped_session(sessionmaker(bind=db.engine))
-
+# モデル定義
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
@@ -36,6 +34,7 @@ class User(db.Model):
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
 
+# メール送信関数（SES）
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
@@ -50,6 +49,7 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e)
 
+# クロス検出
 def detect_cross(df, symbol):
     df["EMA9"] = df["Close"].ewm(span=9).mean()
     df["EMA20"] = df["Close"].ewm(span=20).mean()
@@ -67,6 +67,7 @@ def detect_cross(df, symbol):
     print(f"[{symbol}] クロスなし")
     return None
 
+# バッチ処理ヘルパー
 def batch(iterable, size):
     it = iter(iterable)
     while True:
@@ -75,21 +76,25 @@ def batch(iterable, size):
             break
         yield chunk
 
+# メインループ
 def main_loop():
     with app.app_context():
+        Session = scoped_session(sessionmaker(bind=db.engine))  # ← アプリケーションコンテキスト内に移動！
+
         while True:
             print("ループ実行:", datetime.now())
 
-            session = Session()  # 強制的に新しいDBセッションを取得
-            users = session.query(User).filter_by(notify_enabled=True).all()
-
+            db_session = Session()
+            users = db_session.query(User).filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
+
             for u in users:
                 syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
                 user_map[u.id] = (u, syms)
                 all_symbols.update(syms)
 
+            # データ取得
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
@@ -100,12 +105,14 @@ def main_loop():
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
+            # 取得失敗ログ
             failed_symbols = [sym for sym in all_symbols if sym not in cache]
             if failed_symbols:
                 print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
 
             print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
+            # 各ユーザーへ通知
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
@@ -119,19 +126,15 @@ def main_loop():
                     send_email(user.email, "【クロス検出通知】", body)
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
+            # ログ出力
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
-
-            actual_checked = sum(
-                1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache
-            )
+            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
             print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
-
             total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
             print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
-
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-            session.remove()  # セッション明示的にクローズ
+            Session.remove()
             time.sleep(300)
 
 if __name__ == "__main__":

@@ -10,9 +10,9 @@ from datetime import datetime
 import os
 from itertools import islice
 
-# 環境変数からSESの設定を読み込む
+# 環境変数からSESの送信者情報を取得
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
-SES_SMTP_PASS = os.environ.get("SES_SMTP_PASS")
+SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
 
 app = Flask(__name__)
@@ -29,8 +29,6 @@ class User(db.Model):
     password_hash = db.Column(db.String(128), nullable=False)
     email = db.Column(db.String(255), nullable=False)
     symbols = db.Column(db.Text, nullable=False)
-    smtp_email = db.Column(db.String(255), nullable=False)
-    smtp_password = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
 
 def send_email(to_email, subject, body):
@@ -38,11 +36,10 @@ def send_email(to_email, subject, body):
     msg['Subject'] = subject
     msg['From'] = SES_FROM_EMAIL
     msg['To'] = to_email
-
     try:
         server = smtplib.SMTP('email-smtp.us-east-1.amazonaws.com', 587)
         server.starttls()
-        server.login(SES_SMTP_USER, SES_SMTP_PASS)
+        server.login(SES_SMTP_USER, SES_SMTP_PASSWORD)
         server.sendmail(SES_FROM_EMAIL, to_email, msg.as_string())
         server.quit()
     except Exception as e:
@@ -62,7 +59,6 @@ def detect_cross(df, symbol):
     elif df["Cross"].iloc[-1] == -2:
         print(f"[{symbol}] デッドクロス検出")
         return f"{symbol} で デッドクロス"
-
     print(f"[{symbol}] クロスなし")
     return None
 
@@ -78,6 +74,7 @@ def main_loop():
     with app.app_context():
         while True:
             print("ループ実行:", datetime.now())
+
             users = User.query.filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
@@ -117,11 +114,14 @@ def main_loop():
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
-            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
+            actual_checked = sum(
+                1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache
+            )
             print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
             total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
             print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
+
             time.sleep(300)
 
 if __name__ == "__main__":

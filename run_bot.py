@@ -122,12 +122,13 @@ def main_loop():
                         msg = detect_cross(cache[sym].copy(), sym)
                         if msg:
                             msgs.append(msg)
-                if msgs and user.email:
-                    body = "\n".join(msgs)
-                    send_email(user.email, "【クロス検出通知】", body)
-                    print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
-                else:
-                    if not user.email:
+                if msgs:
+                    email = (user.email or "").strip()
+                    if email:
+                        body = "\n".join(msgs)
+                        send_email(email, "【クロス検出通知】", body)
+                        print(f"{datetime.now()} - メール送信済み: {email} → {len(msgs)}件の通知")
+                    else:
                         print(f"{datetime.now()} - ⚠️ メールアドレス未設定のため送信スキップ: ユーザーID {uid}")
 
             # ログ出力

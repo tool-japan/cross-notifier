@@ -10,6 +10,11 @@ from datetime import datetime
 import os
 from itertools import islice
 
+# 環境変数からSESの設定を読み込む
+SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
+SES_SMTP_PASS = os.environ.get("SES_SMTP_PASS")
+SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
+
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
@@ -28,16 +33,17 @@ class User(db.Model):
     smtp_password = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
 
-def send_email(from_email, app_password, to_email, subject, body):
+def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
-    msg['From'] = from_email
+    msg['From'] = SES_FROM_EMAIL
     msg['To'] = to_email
+
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server = smtplib.SMTP('email-smtp.us-east-1.amazonaws.com', 587)
         server.starttls()
-        server.login(from_email, app_password)
-        server.sendmail(from_email, to_email, msg.as_string())
+        server.login(SES_SMTP_USER, SES_SMTP_PASS)
+        server.sendmail(SES_FROM_EMAIL, to_email, msg.as_string())
         server.quit()
     except Exception as e:
         print("メール送信エラー:", e)
@@ -72,7 +78,6 @@ def main_loop():
     with app.app_context():
         while True:
             print("ループ実行:", datetime.now())
-
             users = User.query.filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
@@ -87,7 +92,6 @@ def main_loop():
                 for sym in batch_syms:
                     try:
                         df = yf.download(sym, period="5d", interval="5m")
-                        # テスト用で時間調整 df = yf.download(sym, period="20d", interval="1d")
                         if not df.empty:
                             cache[sym] = df
                     except Exception as e:
@@ -109,24 +113,16 @@ def main_loop():
                             msgs.append(msg)
                 if msgs:
                     body = "\n".join(msgs)
-                    pw = fernet.decrypt(user.smtp_password.encode()).decode()
-                    send_email(user.smtp_email, pw, user.email, "【クロス検出通知】", body)
+                    send_email(user.email, "【クロス検出通知】", body)
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
-
-            actual_checked = sum(
-                1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache
-            )
+            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
             print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
-
             total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
             print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
-
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
-
             time.sleep(300)
-            # テスト用で時間調整 time.sleep(100)
 
 if __name__ == "__main__":
     main_loop()

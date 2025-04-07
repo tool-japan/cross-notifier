@@ -25,7 +25,7 @@ db = SQLAlchemy(app)
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
 fernet = Fernet(ENCRYPTION_KEY)
 
-# モデル定義
+# モデル定義（smtp_email / smtp_password は削除済）
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
@@ -49,7 +49,7 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e)
 
-# クロス検出
+# クロス検出（条件は調整可能）
 def detect_cross(df, symbol):
     df["EMA9"] = df["Close"].ewm(span=9).mean()
     df["EMA20"] = df["Close"].ewm(span=20).mean()
@@ -67,7 +67,7 @@ def detect_cross(df, symbol):
     print(f"[{symbol}] クロスなし")
     return None
 
-# バッチ処理ヘルパー
+# バッチ処理（10銘柄ずつ）
 def batch(iterable, size):
     it = iter(iterable)
     while True:
@@ -79,7 +79,7 @@ def batch(iterable, size):
 # メインループ
 def main_loop():
     with app.app_context():
-        Session = scoped_session(sessionmaker(bind=db.engine))  # ← アプリケーションコンテキスト内に移動！
+        Session = scoped_session(sessionmaker(bind=db.engine))
 
         while True:
             print("ループ実行:", datetime.now())
@@ -100,20 +100,18 @@ def main_loop():
                 for sym in batch_syms:
                     try:
                         df = yf.download(sym, period="20d", interval="1d")
-                        # df = yf.download(sym, period="5d", interval="5m")
                         if not df.empty:
                             cache[sym] = df
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
-            # 取得失敗ログ
             failed_symbols = [sym for sym in all_symbols if sym not in cache]
             if failed_symbols:
                 print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
 
             print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
-            # 各ユーザーへ通知
+            # 通知処理
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
@@ -134,14 +132,13 @@ def main_loop():
             # ログ出力
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
             actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
-            print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
             total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
+            print(f"{datetime.now()} - クロス判定対象（実際に判定）: {actual_checked}銘柄", flush=True)
             print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
             Session.remove()
-            time.sleep(100)
-            # time.sleep(300)
-            
+            time.sleep(300)  # 本番運用では5分間隔
+
 if __name__ == "__main__":
     main_loop()

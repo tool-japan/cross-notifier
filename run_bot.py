@@ -5,7 +5,6 @@ import smtplib
 from email.mime.text import MIMEText
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from cryptography.fernet import Fernet
 from datetime import datetime, timedelta
 import os
 from itertools import islice
@@ -14,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# SES設定
+# SES用 環境変数
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
@@ -25,11 +24,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:/
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 db = SQLAlchemy(app)
 
-# 暗号化キー（未使用だが互換性保持）
-ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
-fernet = Fernet(ENCRYPTION_KEY)
-
-# ユーザーテーブル
+# モデル定義
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
@@ -38,15 +33,14 @@ class User(db.Model):
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
 
-# 通知履歴テーブル
 class NotificationHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
     symbol = db.Column(db.String(20), nullable=False)
-    cross_type = db.Column(db.String(10), nullable=False)  # 'golden' or 'dead'
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    cross_type = db.Column(db.String(10), nullable=False)  # "golden" or "dead"
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-# メール送信
+# メール送信関数（SES）
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
@@ -88,21 +82,16 @@ def batch(iterable, size):
             break
         yield chunk
 
-# 10分以内の同一通知履歴があるか
-def recently_notified(db_session, user_id, symbol, cross_type):
-    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-    return db_session.query(NotificationHistory).filter_by(
-        user_id=user_id, symbol=symbol, cross_type=cross_type
-    ).filter(NotificationHistory.timestamp >= ten_minutes_ago).first() is not None
-
 # メインループ
 def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
+
         while True:
             print("ループ実行:", datetime.now())
-
             db_session = Session()
+
+            # 全ユーザーの銘柄をまとめて取得
             users = db_session.query(User).filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
@@ -112,57 +101,54 @@ def main_loop():
                 user_map[u.id] = (u, syms)
                 all_symbols.update(syms)
 
-            # データ取得
+            # 株価データ取得
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
                     try:
-                        df = yf.download(sym, period="20d", interval="1d")
+                        df = yf.download(sym, period="20d", interval="1d", progress=False)
                         if not df.empty:
                             cache[sym] = df
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
-            failed_symbols = [sym for sym in all_symbols if sym not in cache]
-            if failed_symbols:
-                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}")
-
             print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
-            # 各ユーザー通知処理
+            # 各ユーザーへ通知
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
+
                 for sym in symbols:
-                    if sym in cache:
-                        cross = detect_cross(cache[sym].copy(), sym)
-                        if cross and not recently_notified(db_session, uid, sym, cross):
-                            msgs.append(f"{sym} で {'ゴールデンクロス' if cross == 'golden' else 'デッドクロス'}")
-                            db_session.add(NotificationHistory(
-                                user_id=uid, symbol=sym, cross_type=cross,
-                                timestamp=datetime.utcnow()
-                            ))
+                    if sym not in cache:
+                        continue
+                    cross_type = detect_cross(cache[sym].copy(), sym)
+                    if not cross_type:
+                        continue
+
+                    # 10分以内に同一の通知がされていないか確認
+                    ten_min_ago = datetime.utcnow() - timedelta(minutes=10)
+                    recent = db_session.query(NotificationHistory).filter_by(
+                        user_id=uid, symbol=sym, cross_type=cross_type
+                    ).filter(NotificationHistory.timestamp >= ten_min_ago).first()
+
+                    if recent:
+                        print(f"{sym} は直近10分以内に {cross_type} 通知済み → スキップ")
+                        continue
+
+                    # 通知登録
+                    db_session.add(NotificationHistory(user_id=uid, symbol=sym, cross_type=cross_type))
+                    msgs.append(f"{sym} で {'ゴールデンクロス' if cross_type == 'golden' else 'デッドクロス'}")
+
                 if msgs and user.email:
                     body = "\n".join(msgs)
-                    send_email(user.email, "【クロス検出通知】", body)
+                    send_email(user.email.strip(), "【クロス検出通知】", body)
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
-                elif not user.email:
-                    print(f"{datetime.now()} - ⚠️ メールアドレス未設定のためスキップ: ユーザーID {uid}")
 
             db_session.commit()
-
-            # ログ
-            print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄")
-            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
-            total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
-            print(f"{datetime.now()} - クロス判定対象（実際に判定）: {actual_checked}銘柄")
-            print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄")
-            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n")
-
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
             Session.remove()
-            time.sleep(100)
+            time.sleep(300)
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
     main_loop()

@@ -5,12 +5,13 @@ import smtplib
 from email.mime.text import MIMEText
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import scoped_session, sessionmaker
 from cryptography.fernet import Fernet
 from datetime import datetime
 import os
 from itertools import islice
 
-# 環境変数からSESの送信者情報を取得
+# 環境変数からSES情報を取得
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
@@ -20,8 +21,12 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:/
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 db = SQLAlchemy(app)
 
+# Fernet鍵取得
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
 fernet = Fernet(ENCRYPTION_KEY)
+
+# SQLAlchemyセッションのscoped_sessionで強制的に毎回DBを読み直す
+Session = scoped_session(sessionmaker(bind=db.engine))
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -75,10 +80,11 @@ def main_loop():
         while True:
             print("ループ実行:", datetime.now())
 
-            users = User.query.filter_by(notify_enabled=True).all()
+            session = Session()  # 強制的に新しいDBセッションを取得
+            users = session.query(User).filter_by(notify_enabled=True).all()
+
             all_symbols = set()
             user_map = {}
-
             for u in users:
                 syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
                 user_map[u.id] = (u, syms)
@@ -114,15 +120,19 @@ def main_loop():
                     print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
             print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
+
             actual_checked = sum(
                 1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache
             )
             print(f"{datetime.now()} - クロス判定対象（実際に判定した銘柄）: {actual_checked}銘柄", flush=True)
+
             total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
             print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
+
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-            time.sleep(100)
+            session.remove()  # セッション明示的にクローズ
+            time.sleep(300)
 
 if __name__ == "__main__":
     main_loop()

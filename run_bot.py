@@ -11,6 +11,9 @@ import os
 from itertools import islice
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from dotenv import load_dotenv
+load_dotenv()  # ← これがないと .env 読み込まれません（ローカルや一部のサーバーで必要）
+
 # SES用 環境変数
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")

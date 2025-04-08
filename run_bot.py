@@ -1,4 +1,4 @@
-    import time
+import time
 import yfinance as yf
 import pandas as pd
 import smtplib
@@ -10,10 +10,12 @@ import os
 from itertools import islice
 from sqlalchemy.orm import scoped_session, sessionmaker
 from dotenv import load_dotenv
+import pytz
+import jpholiday
 
 load_dotenv()
 
-# SES用 環境変数
+# SES用
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
@@ -32,7 +34,7 @@ class User(db.Model):
     email = db.Column(db.String(255), nullable=False)
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
-    role = db.Column(db.String(10), default="user")  # ← admin識別のため追加
+    role = db.Column(db.String(10), default="user")
 
 class NotificationHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -83,20 +85,43 @@ def batch(iterable, size):
             break
         yield chunk
 
-# メイン処理ループ
+# 取引時間チェック
+def is_trading_hours():
+    now_utc = datetime.utcnow()
+
+    # 日本時間（平日9:00〜15:00 & 祝日除く）
+    jst = now_utc.astimezone(pytz.timezone("Asia/Tokyo"))
+    if jst.weekday() < 5 and not jpholiday.is_holiday(jst.date()):
+        if jst.hour == 9 or (10 <= jst.hour < 15):
+            return True
+
+    # 米国時間（平日 9:30〜16:00 / EST or EDT）
+    est = now_utc.astimezone(pytz.timezone("US/Eastern"))
+    if est.weekday() < 5:
+        if (est.hour == 9 and est.minute >= 30) or (10 <= est.hour < 16):
+            return True
+
+    return False
+
+# メインループ
 def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
 
         while True:
-            print("ループ実行:", datetime.now())
-            db_session = Session()
+            print("ループ実行:", datetime.utcnow())
 
+            if not is_trading_hours():
+                print("📛 現在は取引時間外のためスキップします\n")
+                time.sleep(300)
+                continue
+
+            db_session = Session()
             users = db_session.query(User).filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
 
-            # 管理者銘柄の取得（全ユーザーに適用）
+            # 管理者が登録した銘柄は全ユーザーに追加
             admin_symbols = set()
             for admin in users:
                 if admin.role == "admin":
@@ -120,7 +145,7 @@ def main_loop():
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
-            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
+            print(f"{datetime.utcnow()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
@@ -133,7 +158,6 @@ def main_loop():
                     if not cross_type:
                         continue
 
-                    # 20分以内に同一の通知がされていないか確認
                     twenty_min_ago = datetime.utcnow() - timedelta(minutes=20)
                     recent = db_session.query(NotificationHistory).filter_by(
                         user_id=uid, symbol=sym, cross_type=cross_type
@@ -149,10 +173,10 @@ def main_loop():
                 if msgs and user.email:
                     body = "\n".join(msgs)
                     send_email(user.email.strip(), "【クロス検出通知】", body)
-                    print(f"{datetime.now()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
+                    print(f"{datetime.utcnow()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
 
             db_session.commit()
-            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
+            print(f"{datetime.utcnow()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
             Session.remove()
             time.sleep(300)
 

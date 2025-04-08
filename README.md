@@ -70,3 +70,9 @@ with app.app_context():
     db.drop_all()
     db.create_all()
 
+### 3. 起動（開発用）
+python app.py
+
+### 4. バックグラウンド実行（クロス通知ループ）
+python run_bot.py
+

@@ -1,4 +1,4 @@
-import time
+    import time
 import yfinance as yf
 import pandas as pd
 import smtplib
@@ -133,13 +133,14 @@ def main_loop():
                     if not cross_type:
                         continue
 
-                    ten_min_ago = datetime.utcnow() - timedelta(minutes=10)
+                    # 20分以内に同一の通知がされていないか確認
+                    twenty_min_ago = datetime.utcnow() - timedelta(minutes=20)
                     recent = db_session.query(NotificationHistory).filter_by(
                         user_id=uid, symbol=sym, cross_type=cross_type
-                    ).filter(NotificationHistory.timestamp >= ten_min_ago).first()
+                    ).filter(NotificationHistory.timestamp >= twenty_min_ago).first()
 
                     if recent:
-                        print(f"{sym} は直近10分以内に {cross_type} 通知済み → スキップ")
+                        print(f"{sym} は直近20分以内に {cross_type} 通知済み → スキップ")
                         continue
 
                     db_session.add(NotificationHistory(user_id=uid, symbol=sym, cross_type=cross_type))

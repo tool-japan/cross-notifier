@@ -1,233 +1,151 @@
-from flask import Flask, render_template_string, request, redirect, abort
- from flask_sqlalchemy import SQLAlchemy
- from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
- from werkzeug.security import generate_password_hash, check_password_hash
- from flask_limiter import Limiter
- from flask_limiter.util import get_remote_address
- from dotenv import load_dotenv
- import os
- from functools import wraps
- 
- # 環境変数の読み込み（Renderでは自動、ローカルで使う場合は必要）
- load_dotenv()
- 
- app = Flask(__name__)
- app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
- 
- # PostgreSQL URL優先（Render用）。なければSQLiteでローカル動作
- app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
- 
- # DB & ログイン
- db = SQLAlchemy(app)
- login_manager = LoginManager(app)
- 
- # ログイン試行制限（DoS対策）
- limiter = Limiter(get_remote_address, app=app, default_limits=["200/day", "50/hour"])
- 
- # ユーザーモデル（SES送信なのでsmtp情報は不要）
- class User(db.Model, UserMixin):
-     id = db.Column(db.Integer, primary_key=True)
-     username = db.Column(db.String(50), unique=True, nullable=False)
-     password_hash = db.Column(db.String(300), nullable=False)
-     role = db.Column(db.String(10), default="user")  # "admin" or "user"
-     email = db.Column(db.String(255), nullable=True)              # 通知先メールアドレス
-     symbols = db.Column(db.Text, nullable=True)                   # 銘柄リスト（改行区切り）
-     notify_enabled = db.Column(db.Boolean, default=True)          # 通知ON/OFF
- 
- @login_manager.user_loader
- def load_user(user_id):
-     return User.query.get(int(user_id))
- 
- # 管理者だけアクセスできるデコレーター
- def admin_required(f):
-     @wraps(f)
-     def wrapper(*args, **kwargs):
-         if not current_user.is_authenticated or current_user.role != "admin":
-             abort(403)
-         return f(*args, **kwargs)
-     return wrapper
- 
- @app.route("/")
- def home():
-     return """
-     <h1>ようこそ！cross-notifierへ</h1>
-     <p><a href='/login'>ログインはこちら</a></p>
-     """
- 
- @app.route("/login", methods=["GET", "POST"])
- @limiter.limit("5/minute")  # 総当たり攻撃対策
- def login():
-     html = """
-     <h1>ログインページ（仮）</h1>
-     <form method='POST'>
-         ユーザー名：<input name='username'><br>
-         パスワード：<input name='password' type='password'><br>
-         <input type='submit' value='送信'>
-     </form>
-     """
-     if request.method == "POST":
-         user = User.query.filter_by(username=request.form["username"]).first()
-         if user and check_password_hash(user.password_hash, request.form["password"]):
-             login_user(user)
-             return redirect("/dashboard")
-     return render_template_string(html)
- 
- @app.route("/logout")
- @login_required
- def logout():
-     logout_user()
-     return redirect("/")
- 
- @app.route("/mypage")
- @login_required
- def mypage():
-     return f"<h1>{current_user.username}さん、ようこそ！</h1><p><a href='/logout'>ログアウト</a></p>"
- 
- @app.route("/register", methods=["GET", "POST"])
- # @admin_required
- def register():
-     html = """
-     <h1>新規ユーザー登録（管理者専用）</h1>
-     <form method='POST'>
-         ユーザー名：<input name='username'><br>
-         パスワード：<input name='password' type='password'><br>
-         権限：<select name='role'>
-             <option value='user'>一般ユーザー</option>
-             <option value='admin'>管理者</option>
-         </select><br>
-         <input type='submit' value='登録'>
-     </form>
-     """
-     if request.method == "POST":
-         username = request.form["username"]
-         password = generate_password_hash(request.form["password"])
-         role = request.form.get("role", "user")
-         new_user = User(username=username, password_hash=password, role=role)
-         db.session.add(new_user)
-         db.session.commit()
-         login_user(new_user)
-         return redirect("/mypage")
-     return render_template_string(html)
- 
- @app.route("/users")
- @admin_required
- def show_users():
-     users = User.query.all()
-     html = "<h2>登録済みユーザー一覧</h2><ul>"
-     for u in users:
-         html += f"""
-         <li>{u.username} - {u.role}
-             <a href='/delete_user/{u.id}' onclick="return confirm('本当に削除しますか？');">🗑削除</a>
-             <a href='/change_password/{u.id}'>🔑パスワード変更</a>
-         </li>
-         """
-     html += "</ul>"
-     return html
- 
- @app.route("/delete_user/<int:user_id>")
- @admin_required
- def delete_user(user_id):
-     user = User.query.get_or_404(user_id)
-     if user.id == current_user.id:
-         return "自分自身のアカウントは削除できません", 403
-     if user.username == "admin":
-         return "adminユーザーは削除できません", 403
-     db.session.delete(user)
-     db.session.commit()
-     return redirect("/users")
- 
- @app.route("/change_password/<int:user_id>", methods=["GET", "POST"])
- @admin_required
- def change_password(user_id):
-     user = User.query.get_or_404(user_id)
-     if request.method == "POST":
-         new_password = request.form["new_password"]
-         user.password_hash = generate_password_hash(new_password)
-         db.session.commit()
-         return redirect("/users")
-     
-     return render_template_string(f"""
-         <h1>{user.username} のパスワード変更</h1>
-         <form method='POST'>
-             新しいパスワード：<input name='new_password' type='password'><br>
-             <input type='submit' value='変更'>
-         </form>
-     """)
- 
-@app.route("/dashboard", methods=["GET", "POST"])
-@login_required
-def dashboard():
-    if request.method == "POST":
-        # 入力された銘柄を整形（空行削除・重複排除・空白除去）
-        raw_symbols = request.form["symbols"]
-        cleaned_symbols = []
-        seen = set()
-        for line in raw_symbols.splitlines():
-            symbol = line.strip()
-            if symbol and symbol not in seen:
-                cleaned_symbols.append(symbol)
-                seen.add(symbol)
+import time
+import yfinance as yf
+import pandas as pd
+import smtplib
+from email.mime.text import MIMEText
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from cryptography.fernet import Fernet
+from datetime import datetime
+import os
+from itertools import islice
+from sqlalchemy.orm import scoped_session, sessionmaker
+from dotenv import load_dotenv
 
-        # ロールに応じて最大数を決定
-        max_symbols = 10000 if current_user.role == "admin" else 100
-        if len(cleaned_symbols) > max_symbols:
-            return f"""
-                <h2>⚠️ 銘柄数が上限を超えています（{len(cleaned_symbols)}件 / 上限: {max_symbols}件）</h2>
-                <p><a href='/dashboard'>戻る</a></p>
-            """
+load_dotenv()
 
-        # DBに保存（整形後の銘柄を保存）
-        current_user.symbols = "\n".join(cleaned_symbols)
-        current_user.email = request.form["email"]
-        current_user.notify_enabled = "notify" in request.form
-        db.session.commit()
-        return redirect("/dashboard")
+# SES用 環境変数
+SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
+SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
+SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
 
-    # GETリクエスト時の表示
-    html = f"""
-    <h1>通知設定ダッシュボード</h1>
-    <form method="POST">
-        🔘 通知ON：<input type="checkbox" name="notify" {"checked" if current_user.notify_enabled else ""}><br><br>
-        📈 銘柄リスト（1行1銘柄）：<br>
-        <textarea name="symbols" rows="10" cols="30">{current_user.symbols or ""}</textarea><br><br>
-        📩 通知先メールアドレス：<br>
-        <input name="email" value="{current_user.email or ''}"><br><br>
-        <input type="submit" value="保存">
-    </form>
-    <br>
-    <a href="/mypage">← マイページに戻る</a>
-    """
-    return render_template_string(html)
+# Flask & DB初期化
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
+db = SQLAlchemy(app)
 
- 
- @app.route("/me")
- @login_required
- def show_my_info():
-     return f"""
-     <h1>現在の通知設定</h1>
-     <ul>
-         <li>通知ON: {'✅ 有効' if current_user.notify_enabled else '❌ 無効'}</li>
-         <li>銘柄リスト:<pre>{current_user.symbols or '(未設定)'}</pre></li>
-         <li>通知先メール: {current_user.email or '(未設定)'}</li>
-     </ul>
-     <p><a href='/dashboard'>← ダッシュボードに戻る</a></p>
-     """
- 
- @app.route("/debug_users")
- @admin_required
- def debug_users():
-     users = User.query.all()
-     html = "<h1>DBに保存されているユーザー情報</h1><ul>"
-     for u in users:
-         html += f"<li><strong>{u.username}</strong><br>通知ON: {u.notify_enabled}<br>銘柄リスト:<pre>{u.symbols}</pre></li><br>"
-     html += "</ul>"
-     return html
- 
- if __name__ == "__main__":
-     # with app.app_context():
-         # db.drop_all()
-         # db.create_all()
-     print("✅ データベース初期化が完了しました。")
- 
-     port = int(os.environ.get("PORT", 5000))
-     app.run(host="0.0.0.0", port=port)
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
+fernet = Fernet(ENCRYPTION_KEY)
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    symbols = db.Column(db.Text, nullable=False)
+    notify_enabled = db.Column(db.Boolean, default=True)
+
+def send_email(to_email, subject, body):
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = SES_FROM_EMAIL
+    msg['To'] = to_email
+    try:
+        server = smtplib.SMTP('email-smtp.us-east-1.amazonaws.com', 587)
+        server.starttls()
+        server.login(SES_SMTP_USER, SES_SMTP_PASSWORD)
+        server.sendmail(SES_FROM_EMAIL, to_email, msg.as_string())
+        server.quit()
+    except Exception as e:
+        print("メール送信エラー:", e)
+
+def detect_cross(df, symbol):
+    df["EMA9"] = df["Close"].ewm(span=9).mean()
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    df["Signal"] = 0
+    df.loc[df["EMA9"] > df["EMA20"], "Signal"] = 1
+    df.loc[df["EMA9"] < df["EMA20"], "Signal"] = -1
+    df["Cross"] = df["Signal"].diff()
+
+    if df["Cross"].iloc[-1] == 2:
+        print(f"[{symbol}] ゴールデンクロス検出")
+        return f"{symbol} で ゴールデンクロス"
+    elif df["Cross"].iloc[-1] == -2:
+        print(f"[{symbol}] デッドクロス検出")
+        return f"{symbol} で デッドクロス"
+    print(f"[{symbol}] クロスなし")
+    return None
+
+def batch(iterable, size):
+    it = iter(iterable)
+    while True:
+        chunk = list(islice(it, size))
+        if not chunk:
+            break
+        yield chunk
+
+def main_loop():
+    with app.app_context():
+        Session = scoped_session(sessionmaker(bind=db.engine))
+
+        while True:
+            now = datetime.now()
+            print("ループ実行:", now)
+
+            # ↓ 一時的にコメントアウト中：祝日 & 平日取引時間判定
+            # if now.weekday() >= 5 or not (datetime.time(9, 0) <= now.time() <= datetime.time(15, 0)):
+            #     print("⏰ 日本市場の取引時間外のためスキップ")
+            #     time.sleep(300)
+            #     continue
+
+            db_session = Session()
+            users = db_session.query(User).filter_by(notify_enabled=True).all()
+            all_symbols = set()
+            user_map = {}
+
+            for u in users:
+                syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
+                user_map[u.id] = (u, syms)
+                all_symbols.update(syms)
+
+            cache = {}
+            symbol_count = 0
+            for batch_syms in batch(all_symbols, 10):
+                for sym in batch_syms:
+                    try:
+                        if symbol_count > 0 and symbol_count % 100 == 0:
+                            print("💤 100銘柄ごとに5秒休憩...")
+                            time.sleep(5)
+                        df = yf.download(sym, period="20d", interval="1d")
+                        if not df.empty:
+                            cache[sym] = df
+                            symbol_count += 1
+                    except Exception as e:
+                        print(f"エラー（{sym}）: {e}")
+
+            failed_symbols = [sym for sym in all_symbols if sym not in cache]
+            if failed_symbols:
+                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
+
+            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
+
+            for uid, (user, symbols) in user_map.items():
+                print(f"ユーザーID {uid} の登録銘柄: {symbols}")
+                msgs = []
+                for sym in symbols:
+                    if sym in cache:
+                        msg = detect_cross(cache[sym].copy(), sym)
+                        if msg:
+                            msgs.append(msg)
+                if msgs:
+                    email = (user.email or "").strip()
+                    if email:
+                        body = "\n".join(msgs)
+                        send_email(email, "【クロス検出通知】", body)
+                        print(f"{datetime.now()} - メール送信済み: {email} → {len(msgs)}件の通知")
+                    else:
+                        print(f"{datetime.now()} - ⚠️ メールアドレス未設定のため送信スキップ: ユーザーID {uid}")
+
+            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
+            total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
+            print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
+            print(f"{datetime.now()} - クロス判定対象（実際に判定）: {actual_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
+
+            Session.remove()
+            time.sleep(300)
+
+if __name__ == "__main__":
+    main_loop()

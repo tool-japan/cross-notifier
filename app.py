@@ -1,141 +1,161 @@
-# ✅ 完全版 run_bot.py
-import os
-from datetime import datetime, timedelta, time
-import time as time_module
-import yfinance as yf
-import pandas as pd
-import smtplib
-from email.mime.text import MIMEText
-from flask import Flask
-from sqlalchemy.orm import scoped_session, sessionmaker
+from flask import Flask, render_template_string, request, redirect, abort
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
+from functools import wraps
+import os
 
-from models import db, User  # ← モデルを読み込み
+# モデルとDBをインポート
+from models import db, User
 
 load_dotenv()
 
-SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
-SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
-SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
-
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 db.init_app(app)
 
-def send_email(to_email, subject, body):
-    msg = MIMEText(body)
-    msg['Subject'] = subject
-    msg['From'] = SES_FROM_EMAIL
-    msg['To'] = to_email
-    try:
-        server = smtplib.SMTP('email-smtp.us-east-1.amazonaws.com', 587)
-        server.starttls()
-        server.login(SES_SMTP_USER, SES_SMTP_PASSWORD)
-        server.sendmail(SES_FROM_EMAIL, to_email, msg.as_string())
-        server.quit()
-    except Exception as e:
-        print("メール送信エラー:", e)
+login_manager = LoginManager(app)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200/day", "50/hour"])
 
-def detect_cross(df, symbol):
-    df["EMA9"] = df["Close"].ewm(span=9).mean()
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
-    df["Signal"] = 0
-    df.loc[df["EMA9"] > df["EMA20"], "Signal"] = 1
-    df.loc[df["EMA9"] < df["EMA20"], "Signal"] = -1
-    df["Cross"] = df["Signal"].diff()
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
-    if df["Cross"].iloc[-1] == 2:
-        return f"{symbol} で ゴールデンクロス"
-    elif df["Cross"].iloc[-1] == -2:
-        return f"{symbol} で デッドクロス"
-    return None
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != "admin":
+            abort(403)
+        return f(*args, **kwargs)
+    return wrapper
 
-def batch(iterable, size):
-    it = iter(iterable)
-    while True:
-        chunk = list([next(it, None) for _ in range(size)])
-        chunk = [i for i in chunk if i]
-        if not chunk:
-            break
-        yield chunk
+@app.route("/")
+def home():
+    return """
+    <h1>ようこそ！cross-notifierへ</h1>
+    <p><a href='/login'>ログインはこちら</a></p>
+    """
 
-def main_loop():
-    with app.app_context():
-        Session = scoped_session(sessionmaker(bind=db.engine))
+@app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5/minute")
+def login():
+    html = """
+    <h1>ログインページ</h1>
+    <form method='POST'>
+        ユーザー名：<input name='username'><br>
+        パスワード：<input name='password' type='password'><br>
+        <input type='submit' value='送信'>
+    </form>
+    """
+    if request.method == "POST":
+        user = User.query.filter_by(username=request.form["username"]).first()
+        if user and check_password_hash(user.password_hash, request.form["password"]):
+            login_user(user)
+            return redirect("/dashboard")
+    return render_template_string(html)
 
-        while True:
-            now_utc = datetime.utcnow()
-            now_jst = now_utc + timedelta(hours=9)
-            now_est = now_utc - timedelta(hours=4)
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect("/")
 
-            is_japan_time = now_jst.weekday() < 5 and time(9, 0) <= now_jst.time() <= time(15, 0)
-            is_us_time = now_est.weekday() < 5 and time(9, 30) <= now_est.time() <= time(16, 0)
+@app.route("/dashboard", methods=["GET", "POST"])
+@login_required
+def dashboard():
+    if request.method == "POST":
+        current_user.email = request.form["email"]
+        current_user.symbols = request.form["symbols"]
+        current_user.notify_enabled = "notify_enabled" in request.form
+        db.session.commit()
+        return redirect("/dashboard")
 
-            if not is_japan_time and not is_us_time:
-                print(f"{datetime.now()} - ⏸ 取引時間外のためスキップ")
-                time_module.sleep(60)
-                continue
+    return render_template_string("""
+        <h2>{{ user.username }}さんの通知設定</h2>
+        <form method="POST">
+            通知先メールアドレス：<input name="email" value="{{ user.email }}"><br>
+            銘柄コード（改行で複数）：<br>
+            <textarea name="symbols" rows="5" cols="30">{{ user.symbols }}</textarea><br>
+            通知ON：<input type="checkbox" name="notify_enabled" {% if user.notify_enabled %}checked{% endif %}><br>
+            <input type="submit" value="保存">
+        </form>
+        <p><a href='/logout'>ログアウト</a></p>
+    """, user=current_user)
 
-            print("ループ実行:", datetime.now())
+@app.route("/register", methods=["GET", "POST"])
+# @admin_required  # 管理者のみ有効にしたい場合ここを有効に
+def register():
+    html = """
+    <h1>新規ユーザー登録</h1>
+    <form method='POST'>
+        ユーザー名：<input name='username'><br>
+        パスワード：<input name='password' type='password'><br>
+        権限：<select name='role'>
+            <option value='user'>一般ユーザー</option>
+            <option value='admin'>管理者</option>
+        </select><br>
+        <input type='submit' value='登録'>
+    </form>
+    """
+    if request.method == "POST":
+        username = request.form["username"]
+        password = generate_password_hash(request.form["password"])
+        role = request.form.get("role", "user")
+        new_user = User(username=username, password_hash=password, role=role)
+        db.session.add(new_user)
+        db.session.commit()
+        login_user(new_user)
+        return redirect("/dashboard")
+    return render_template_string(html)
 
-            db_session = Session()
-            users = db_session.query(User).filter_by(notify_enabled=True).all()
-            all_symbols = set()
-            user_map = {}
+@app.route("/users")
+@admin_required
+def show_users():
+    users = User.query.all()
+    html = "<h2>登録済みユーザー一覧</h2><ul>"
+    for u in users:
+        html += f"""
+        <li>{u.username} - {u.role}
+            <a href='/delete_user/{u.id}' onclick="return confirm('本当に削除しますか？');">🗑削除</a>
+            <a href='/change_password/{u.id}'>🔑パスワード変更</a>
+        </li>
+        """
+    html += "</ul>"
+    return html
 
-            for u in users:
-                syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
-                user_map[u.id] = (u, syms)
-                all_symbols.update(syms)
+@app.route("/delete_user/<int:user_id>")
+@admin_required
+def delete_user(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        return "自分自身のアカウントは削除できません", 403
+    if user.username == "admin":
+        return "adminユーザーは削除できません", 403
+    db.session.delete(user)
+    db.session.commit()
+    return redirect("/users")
 
-            japan_symbols = {s for s in all_symbols if s[0].isdigit()}
-            us_symbols = {s for s in all_symbols if s[0].isalpha()}
-            symbols_to_fetch = set()
+@app.route("/change_password/<int:user_id>", methods=["GET", "POST"])
+@admin_required
+def change_password(user_id):
+    user = User.query.get_or_404(user_id)
+    if request.method == "POST":
+        new_password = request.form["new_password"]
+        user.password_hash = generate_password_hash(new_password)
+        db.session.commit()
+        return redirect("/users")
 
-            if is_japan_time:
-                symbols_to_fetch.update([s + ".T" for s in japan_symbols])
-            if is_us_time:
-                symbols_to_fetch.update(us_symbols)
-
-            cache = {}
-            access_count = 0
-            for batch_syms in batch(symbols_to_fetch, 10):
-                for sym in batch_syms:
-                    try:
-                        df = yf.download(sym, period="20d", interval="1d", progress=False)
-                        if not df.empty:
-                            cache[sym] = df
-                            access_count += 1
-                            if access_count % 100 == 0:
-                                print("🔄 100件取得完了、5秒待機...")
-                                time_module.sleep(5)
-                    except Exception as e:
-                        print(f"エラー（{sym}）: {e}")
-
-            failed_symbols = [sym for sym in symbols_to_fetch if sym not in cache]
-            if failed_symbols:
-                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}")
-
-            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
-
-            for uid, (user, symbols) in user_map.items():
-                msgs = []
-                for sym in symbols:
-                    actual = sym + ".T" if sym[0].isdigit() else sym
-                    df = cache.get(actual)
-                    if df is not None:
-                        msg = detect_cross(df, sym)
-                        if msg:
-                            msgs.append(msg)
-
-                if msgs:
-                    body = "\n".join(msgs)
-                    send_email(user.email, "クロス検出通知", body)
-                    print(f"📧 {user.username} へ通知: {msgs}")
-
-            db_session.close()
-            time_module.sleep(300)
+    return render_template_string(f"""
+        <h1>{user.username} のパスワード変更</h1>
+        <form method='POST'>
+            新しいパスワード：<input name='new_password' type='password'><br>
+            <input type='submit' value='変更'>
+        </form>
+    """)
 
 if __name__ == "__main__":
-    main_loop()
+    app.run(debug=True)

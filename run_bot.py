@@ -5,17 +5,16 @@ import smtplib
 from email.mime.text import MIMEText
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
+from cryptography.fernet import Fernet
+from datetime import datetime
 import os
 from itertools import islice
 from sqlalchemy.orm import scoped_session, sessionmaker
 from dotenv import load_dotenv
-import pytz
-import jpholiday
 
 load_dotenv()
 
-# SES用
+# SES用 環境変数
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
 SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
@@ -26,6 +25,9 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:/
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 db = SQLAlchemy(app)
 
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", Fernet.generate_key())
+fernet = Fernet(ENCRYPTION_KEY)
+
 # モデル定義
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -34,16 +36,15 @@ class User(db.Model):
     email = db.Column(db.String(255), nullable=False)
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
-    role = db.Column(db.String(10), default="user")
 
-class NotificationHistory(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False)
-    symbol = db.Column(db.String(20), nullable=False)
-    cross_type = db.Column(db.String(10), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+# 補完処理：日本株なら `.T` を自動付与
+def normalize_symbol(sym):
+    sym = sym.strip().upper()
+    if sym and sym[0].isdigit():
+        return sym + ".T"
+    return sym
 
-# メール送信
+# メール送信関数
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
@@ -69,10 +70,10 @@ def detect_cross(df, symbol):
 
     if df["Cross"].iloc[-1] == 2:
         print(f"[{symbol}] ゴールデンクロス検出")
-        return "golden"
+        return f"{symbol} で ゴールデンクロス"
     elif df["Cross"].iloc[-1] == -2:
         print(f"[{symbol}] デッドクロス検出")
-        return "dead"
+        return f"{symbol} で デッドクロス"
     print(f"[{symbol}] クロスなし")
     return None
 
@@ -85,100 +86,68 @@ def batch(iterable, size):
             break
         yield chunk
 
-# 取引時間チェック
-def is_trading_hours():
-    now_utc = datetime.utcnow()
-
-    # 日本時間（平日9:00〜15:00 & 祝日除く）
-    jst = now_utc.astimezone(pytz.timezone("Asia/Tokyo"))
-    if jst.weekday() < 5 and not jpholiday.is_holiday(jst.date()):
-        if jst.hour == 9 or (10 <= jst.hour < 15):
-            return True
-
-    # 米国時間（平日 9:30〜16:00 / EST or EDT）
-    est = now_utc.astimezone(pytz.timezone("US/Eastern"))
-    if est.weekday() < 5:
-        if (est.hour == 9 and est.minute >= 30) or (10 <= est.hour < 16):
-            return True
-
-    return False
-
 # メインループ
 def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
 
         while True:
-            print("ループ実行:", datetime.utcnow())
-
-            if not is_trading_hours():
-                print("📛 現在は取引時間外のためスキップします\n")
-                time.sleep(300)
-                continue
+            print("ループ実行:", datetime.now())
 
             db_session = Session()
             users = db_session.query(User).filter_by(notify_enabled=True).all()
             all_symbols = set()
             user_map = {}
 
-            # 管理者が登録した銘柄は全ユーザーに追加
-            admin_symbols = set()
-            for admin in users:
-                if admin.role == "admin":
-                    admin_symbols.update([s.strip() for s in admin.symbols.splitlines() if s.strip()])
-
             for u in users:
-                user_symbols = set([s.strip() for s in u.symbols.splitlines() if s.strip()])
-                if u.role != "admin":
-                    user_symbols.update(admin_symbols)
-                user_map[u.id] = (u, list(user_symbols))
-                all_symbols.update(user_symbols)
+                syms = [normalize_symbol(s) for s in u.symbols.splitlines() if s.strip()]
+                user_map[u.id] = (u, syms)
+                all_symbols.update(syms)
 
             # データ取得
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
                     try:
-                        df = yf.download(sym, period="20d", interval="1d", progress=False)
+                        df = yf.download(sym, period="20d", interval="1d")
                         if not df.empty:
                             cache[sym] = df
                     except Exception as e:
                         print(f"エラー（{sym}）: {e}")
 
-            print(f"{datetime.utcnow()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
+            failed_symbols = [sym for sym in all_symbols if sym not in cache]
+            if failed_symbols:
+                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
 
+            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
+
+            # 通知処理
             for uid, (user, symbols) in user_map.items():
                 print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
-
                 for sym in symbols:
-                    if sym not in cache:
-                        continue
-                    cross_type = detect_cross(cache[sym].copy(), sym)
-                    if not cross_type:
-                        continue
+                    if sym in cache:
+                        msg = detect_cross(cache[sym].copy(), sym)
+                        if msg:
+                            msgs.append(msg)
+                if msgs:
+                    email = (user.email or "").strip()
+                    if email:
+                        body = "\n".join(msgs)
+                        send_email(email, "【クロス検出通知】", body)
+                        print(f"{datetime.now()} - メール送信済み: {email} → {len(msgs)}件の通知")
+                    else:
+                        print(f"{datetime.now()} - ⚠️ メールアドレス未設定のため送信スキップ: ユーザーID {uid}")
 
-                    twenty_min_ago = datetime.utcnow() - timedelta(minutes=20)
-                    recent = db_session.query(NotificationHistory).filter_by(
-                        user_id=uid, symbol=sym, cross_type=cross_type
-                    ).filter(NotificationHistory.timestamp >= twenty_min_ago).first()
+            print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
+            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
+            total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
+            print(f"{datetime.now()} - クロス判定対象（実際に判定）: {actual_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
-                    if recent:
-                        print(f"{sym} は直近20分以内に {cross_type} 通知済み → スキップ")
-                        continue
-
-                    db_session.add(NotificationHistory(user_id=uid, symbol=sym, cross_type=cross_type))
-                    msgs.append(f"{sym} で {'ゴールデンクロス' if cross_type == 'golden' else 'デッドクロス'}")
-
-                if msgs and user.email:
-                    body = "\n".join(msgs)
-                    send_email(user.email.strip(), "【クロス検出通知】", body)
-                    print(f"{datetime.utcnow()} - メール送信済み: {user.email} → {len(msgs)}件の通知")
-
-            db_session.commit()
-            print(f"{datetime.utcnow()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
             Session.remove()
-            time.sleep(300)
+            time.sleep(100)  # 本番運用では300秒（5分）などに調整
 
 if __name__ == "__main__":
     main_loop()

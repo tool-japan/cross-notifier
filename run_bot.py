@@ -1,4 +1,3 @@
-# ✅ デバッグ用ログ強化済み run_bot.py（flush付き完全版）
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -64,6 +63,12 @@ def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
 
+        # 本番用ループ（後で戻す用）:
+        # while True:
+        #     実行処理
+        #     time_module.sleep(300)
+
+        # ↓ テスト用：一度だけ実行
         now_utc = datetime.utcnow()
         now_jst = now_utc + timedelta(hours=9)
         now_est = now_utc - timedelta(hours=4)

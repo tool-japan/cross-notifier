@@ -44,19 +44,6 @@ def normalize_symbol(sym):
         return sym + ".T"
     return sym
 
-# リトライ付きデータ取得
-def fetch_data_with_retry(symbol, retries=3, delay=1):
-    for attempt in range(retries):
-        try:
-            df = yf.download(symbol, period="20d", interval="1d", progress=False)
-            if not df.empty:
-                return df
-        except Exception as e:
-            print(f"[{symbol}] データ取得エラー: {e}")
-        time.sleep(delay * (2 ** attempt))  # 指数バックオフ
-    print(f"[{symbol}] 最終取得失敗")
-    return None
-
 # メール送信関数
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
@@ -117,13 +104,16 @@ def main_loop():
                 user_map[u.id] = (u, syms)
                 all_symbols.update(syms)
 
-            # データ取得（リトライ付き）
+            # データ取得
             cache = {}
             for batch_syms in batch(all_symbols, 10):
                 for sym in batch_syms:
-                    df = fetch_data_with_retry(sym)
-                    if df is not None:
-                        cache[sym] = df
+                    try:
+                        df = yf.download(sym, period="20d", interval="1d")
+                        if not df.empty:
+                            cache[sym] = df
+                    except Exception as e:
+                        print(f"エラー（{sym}）: {e}")
 
             failed_symbols = [sym for sym in all_symbols if sym not in cache]
             if failed_symbols:
@@ -157,7 +147,7 @@ def main_loop():
             print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
             Session.remove()
-            time.sleep(300)
+            time.sleep(100)  # 本番運用では300秒（5分）などに調整
 
 if __name__ == "__main__":
     main_loop()

@@ -92,9 +92,9 @@ def main_loop():
         us_symbols = {s for s in all_symbols if s[0].isalpha()}
         symbols_to_fetch = set()
 
-        if is_japan_time:
+        # if is_japan_time:
             symbols_to_fetch.update([s + ".T" for s in japan_symbols])
-        if is_us_time:
+        # if is_us_time:
             symbols_to_fetch.update(us_symbols)
 
         cache = {}

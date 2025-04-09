@@ -93,9 +93,9 @@ def main_loop():
         symbols_to_fetch = set()
 
         # if is_japan_time:
-            symbols_to_fetch.update([s + ".T" for s in japan_symbols])
+        symbols_to_fetch.update([s + ".T" for s in japan_symbols]) #コメントアウト時はインデント調整
         # if is_us_time:
-            symbols_to_fetch.update(us_symbols)
+        symbols_to_fetch.update(us_symbols) #コメントアウト時はインデント調整
 
         cache = {}
         access_count = 0

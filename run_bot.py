@@ -6,11 +6,13 @@ from email.mime.text import MIMEText
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from cryptography.fernet import Fernet
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
+from itertools import islice
 from sqlalchemy.orm import scoped_session, sessionmaker
-from concurrent.futures import ThreadPoolExecutor
-import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # SES用 環境変数
 SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
@@ -34,9 +36,15 @@ class User(db.Model):
     email = db.Column(db.String(255), nullable=False)
     symbols = db.Column(db.Text, nullable=False)
     notify_enabled = db.Column(db.Boolean, default=True)
-    role = db.Column(db.String(10), default="user")  # "admin" or "user"
 
-# メール送信
+# 補完処理：日本株なら `.T` を自動付与
+def normalize_symbol(sym):
+    sym = sym.strip().upper()
+    if sym and sym[0].isdigit():
+        return sym + ".T"
+    return sym
+
+# メール送信関数
 def send_email(to_email, subject, body):
     msg = MIMEText(body)
     msg['Subject'] = subject
@@ -61,23 +69,22 @@ def detect_cross(df, symbol):
     df["Cross"] = df["Signal"].diff()
 
     if df["Cross"].iloc[-1] == 2:
+        print(f"[{symbol}] ゴールデンクロス検出")
         return f"{symbol} で ゴールデンクロス"
     elif df["Cross"].iloc[-1] == -2:
+        print(f"[{symbol}] デッドクロス検出")
         return f"{symbol} で デッドクロス"
+    print(f"[{symbol}] クロスなし")
     return None
 
-# シンボル補正（日本株は.Tを付ける）
-def normalize_symbol(sym):
-    return f"{sym}.T" if re.match(r"^\d", sym) and not sym.endswith(".T") else sym
-
-# シンボル取得処理（並列化用）
-def fetch_symbol_data(sym):
-    try:
-        df = yf.download(sym, period="20d", interval="1d", progress=False)
-        return (sym, df if not df.empty else None)
-    except Exception as e:
-        print(f"データ取得エラー（{sym}）: {e}")
-        return (sym, None)
+# バッチ処理
+def batch(iterable, size):
+    it = iter(iterable)
+    while True:
+        chunk = list(islice(it, size))
+        if not chunk:
+            break
+        yield chunk
 
 # メインループ
 def main_loop():
@@ -93,31 +100,30 @@ def main_loop():
             user_map = {}
 
             for u in users:
-                raw_syms = u.symbols.splitlines()
-                cleaned_syms = list({normalize_symbol(s.strip()) for s in raw_syms if s.strip()})
+                syms = [normalize_symbol(s) for s in u.symbols.splitlines() if s.strip()]
+                user_map[u.id] = (u, syms)
+                all_symbols.update(syms)
 
-                # 管理者/一般ユーザーの制限
-                limit = 10000 if u.role == "admin" else 100
-                limited_syms = cleaned_syms[:limit]
-                user_map[u.id] = (u, limited_syms)
-                all_symbols.update(limited_syms)
-
-            print(f"総ユニーク銘柄数: {len(all_symbols)}")
-
-            # 並列取得
+            # データ取得
             cache = {}
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                results = executor.map(fetch_symbol_data, all_symbols)
+            for batch_syms in batch(all_symbols, 10):
+                for sym in batch_syms:
+                    try:
+                        df = yf.download(sym, period="20d", interval="1d")
+                        if not df.empty:
+                            cache[sym] = df
+                    except Exception as e:
+                        print(f"エラー（{sym}）: {e}")
 
-            for sym, df in results:
-                if df is not None:
-                    cache[sym] = df
+            failed_symbols = [sym for sym in all_symbols if sym not in cache]
+            if failed_symbols:
+                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
 
-            print(f"{datetime.now()} - 取得成功: {len(cache)}銘柄 / 全体: {len(all_symbols)}銘柄")
+            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
-            # 通知判定
+            # 通知処理
             for uid, (user, symbols) in user_map.items():
-                print(f"ユーザーID {uid} - 登録銘柄数: {len(symbols)}")
+                print(f"ユーザーID {uid} の登録銘柄: {symbols}")
                 msgs = []
                 for sym in symbols:
                     if sym in cache:
@@ -125,13 +131,23 @@ def main_loop():
                         if msg:
                             msgs.append(msg)
                 if msgs:
-                    body = "\n".join(msgs)
-                    send_email(user.email.strip(), "【クロス検出通知】", body)
-                    print(f"{datetime.now()} - 通知送信: {user.email} → {len(msgs)}件")
+                    email = (user.email or "").strip()
+                    if email:
+                        body = "\n".join(msgs)
+                        send_email(email, "【クロス検出通知】", body)
+                        print(f"{datetime.now()} - メール送信済み: {email} → {len(msgs)}件の通知")
+                    else:
+                        print(f"{datetime.now()} - ⚠️ メールアドレス未設定のため送信スキップ: ユーザーID {uid}")
+
+            print(f"{datetime.now()} - ダウンロード成功: {len(cache)}銘柄", flush=True)
+            actual_checked = sum(1 for _, (user, symbols) in user_map.items() for sym in symbols if sym in cache)
+            total_checked = sum(len(symbols) for _, (user, symbols) in user_map.items())
+            print(f"{datetime.now()} - クロス判定対象（実際に判定）: {actual_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - クロス判定対象（登録ベース）: {total_checked}銘柄", flush=True)
+            print(f"{datetime.now()} - 全ユーザーのクロス判定完了。5分休憩します...\n", flush=True)
 
             Session.remove()
-            print(f"{datetime.now()} - ループ完了。次回まで休止...\n")
-            time.sleep(300)
+            time.sleep(100)  # 本番運用では300秒（5分）などに調整
 
 if __name__ == "__main__":
     main_loop()

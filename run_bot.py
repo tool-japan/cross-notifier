@@ -1,4 +1,3 @@
-# ✅ 完全版 run_bot.py
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -64,78 +63,78 @@ def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
 
-        while True:
-            now_utc = datetime.utcnow()
-            now_jst = now_utc + timedelta(hours=9)
-            now_est = now_utc - timedelta(hours=4)
+        # while True:
+        now_utc = datetime.utcnow()
+        now_jst = now_utc + timedelta(hours=9)
+        now_est = now_utc - timedelta(hours=4)
 
-            is_japan_time = now_jst.weekday() < 5 and time(9, 0) <= now_jst.time() <= time(15, 0)
-            is_us_time = now_est.weekday() < 5 and time(9, 30) <= now_est.time() <= time(16, 0)
+        is_japan_time = now_jst.weekday() < 5 and time(9, 0) <= now_jst.time() <= time(15, 0)
+        is_us_time = now_est.weekday() < 5 and time(9, 30) <= now_est.time() <= time(16, 0)
 
-            if not is_japan_time and not is_us_time:
-                print(f"{datetime.now()} - ⏸ 取引時間外のためスキップ")
-                time_module.sleep(60)
-                continue
+        # if not is_japan_time and not is_us_time:
+        #     print(f"{datetime.now()} - ⏸ 取引時間外のためスキップ")
+        #     time_module.sleep(60)
+        #     continue
 
-            print("ループ実行:", datetime.now())
+        print("ループ実行:", datetime.now())
 
-            db_session = Session()
-            users = db_session.query(User).filter_by(notify_enabled=True).all()
-            all_symbols = set()
-            user_map = {}
+        db_session = Session()
+        users = db_session.query(User).filter_by(notify_enabled=True).all()
+        all_symbols = set()
+        user_map = {}
 
-            for u in users:
-                syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
-                user_map[u.id] = (u, syms)
-                all_symbols.update(syms)
+        for u in users:
+            syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
+            user_map[u.id] = (u, syms)
+            all_symbols.update(syms)
 
-            japan_symbols = {s for s in all_symbols if s[0].isdigit()}
-            us_symbols = {s for s in all_symbols if s[0].isalpha()}
-            symbols_to_fetch = set()
+        japan_symbols = {s for s in all_symbols if s[0].isdigit()}
+        us_symbols = {s for s in all_symbols if s[0].isalpha()}
+        symbols_to_fetch = set()
 
-            if is_japan_time:
-                symbols_to_fetch.update([s + ".T" for s in japan_symbols])
-            if is_us_time:
-                symbols_to_fetch.update(us_symbols)
+        if is_japan_time:
+            symbols_to_fetch.update([s + ".T" for s in japan_symbols])
+        if is_us_time:
+            symbols_to_fetch.update(us_symbols)
 
-            cache = {}
-            access_count = 0
-            for batch_syms in batch(symbols_to_fetch, 10):
-                for sym in batch_syms:
-                    try:
-                        df = yf.download(sym, period="20d", interval="1d", progress=False)
-                        if not df.empty:
-                            cache[sym] = df
-                            access_count += 1
-                            if access_count % 100 == 0:
-                                print("🔄 100件取得完了、5秒待機...")
-                                time_module.sleep(5)
-                    except Exception as e:
-                        print(f"エラー（{sym}）: {e}")
+        cache = {}
+        access_count = 0
+        for batch_syms in batch(symbols_to_fetch, 10):
+            for sym in batch_syms:
+                try:
+                    df = yf.download(sym, period="20d", interval="1d", progress=False)
+                    if not df.empty:
+                        cache[sym] = df
+                        access_count += 1
+                        if access_count % 100 == 0:
+                            print("🔄 100件取得完了、5秒待機...")
+                            time_module.sleep(5)
+                except Exception as e:
+                    print(f"エラー（{sym}）: {e}")
 
-            failed_symbols = [sym for sym in symbols_to_fetch if sym not in cache]
-            if failed_symbols:
-                print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}")
+        failed_symbols = [sym for sym in symbols_to_fetch if sym not in cache]
+        if failed_symbols:
+            print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}")
 
-            print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
+        print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄")
 
-            for uid, (user, symbols) in user_map.items():
-                msgs = []
-                for sym in symbols:
-                    actual = sym + ".T" if sym[0].isdigit() else sym
-                    df = cache.get(actual)
-                    if df is not None:
-                        msg = detect_cross(df, sym)
-                        if msg:
-                            msgs.append(msg)
+        for uid, (user, symbols) in user_map.items():
+            msgs = []
+            for sym in symbols:
+                actual = sym + ".T" if sym[0].isdigit() else sym
+                df = cache.get(actual)
+                if df is not None:
+                    msg = detect_cross(df, sym)
+                    if msg:
+                        msgs.append(msg)
 
-                if msgs:
-                    body = "\n".join(msgs)
-                    send_email(user.email, "クロス検出通知", body)
-                    print(f"📧 {user.username} へ通知: {msgs}")
+            if msgs:
+                body = "\n".join(msgs)
+                send_email(user.email, "クロス検出通知", body)
+                print(f"📧 {user.username} へ通知: {msgs}")
 
-            db_session.close()
-            time_module.sleep(300)
+        db_session.close()
+        # time_module.sleep(300)  # ← ループ停止中のため不要
 
 if __name__ == "__main__":
     main_loop()

@@ -1,4 +1,4 @@
-# ✅ デイトレード向けに最適化した run_bot.py（5分足 + EMA5/EMA12 使用）
+# ✅ 強度レベル付きクロス判定 & メール送信時刻を本文冒頭に追加（完全版）
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -45,10 +45,14 @@ def detect_cross(df, symbol):
     df.loc[df["EMA5"] < df["EMA12"], "Signal"] = -1
     df["Cross"] = df["Signal"].diff()
 
+    diff = abs(df["EMA5"].iloc[-1] - df["EMA12"].iloc[-1])
+
     if df["Cross"].iloc[-1] == 2:
-        return "ゴールデンクロス"
+        level = "強" if diff > 1.0 else "弱"
+        return f"ゴールデンクロス（{level}）"
     elif df["Cross"].iloc[-1] == -2:
-        return "デッドクロス"
+        level = "強" if diff > 1.0 else "弱"
+        return f"デッドクロス（{level}）"
     return None
 
 def batch(iterable, size):
@@ -63,6 +67,10 @@ def batch(iterable, size):
 def format_email_body(results):
     jp = []
     us = []
+    now_jst = datetime.utcnow() + timedelta(hours=9)
+    timestamp = now_jst.strftime("%Y-%m-%d %H:%M:%S")
+    header = f"通知時刻（日本時間）: {timestamp}\n"
+
     for symbol, cross_type in results:
         is_jp = symbol[0].isdigit()
         symbol_with_suffix = symbol + ".T" if is_jp else symbol
@@ -86,7 +94,7 @@ def format_email_body(results):
         else:
             us.append(line)
 
-    body = ""
+    body = header + "\n"
     if jp:
         body += "国内株式\n" + "\n".join(jp) + "\n"
     if us:

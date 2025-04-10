@@ -1,3 +1,4 @@
+# ✅ メール本文と件名をアップグレードした run_bot.py（銘柄名・リンク付き）
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -45,9 +46,9 @@ def detect_cross(df, symbol):
     df["Cross"] = df["Signal"].diff()
 
     if df["Cross"].iloc[-1] == 2:
-        return f"{symbol} で ゴールデンクロス"
+        return "ゴールデンクロス"
     elif df["Cross"].iloc[-1] == -2:
-        return f"{symbol} で デッドクロス"
+        return "デッドクロス"
     return None
 
 def batch(iterable, size):
@@ -59,22 +60,49 @@ def batch(iterable, size):
             break
         yield chunk
 
+def format_email_body(results):
+    jp = []
+    us = []
+    for symbol, cross_type in results:
+        is_jp = symbol[0].isdigit()
+        symbol_with_suffix = symbol + ".T" if is_jp else symbol
+
+        try:
+            info = yf.Ticker(symbol_with_suffix).info
+            name = info.get("longName", "名称不明")
+        except Exception:
+            name = "名称取得失敗"
+
+        signal = "買い気配" if "ゴールデンクロス" in cross_type else "売り気配"
+        url = f"https://finance.yahoo.co.jp/quote/{symbol_with_suffix}"
+
+        line = f"""{symbol}
+{cross_type}→{signal}
+{name}
+{url}
+"""
+        if is_jp:
+            jp.append(line)
+        else:
+            us.append(line)
+
+    body = ""
+    if jp:
+        body += "国内株式\n" + "\n".join(jp) + "\n"
+    if us:
+        body += "米国株式\n" + "\n".join(us)
+
+    return body.strip()
+
 def main_loop():
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
 
-        # 本番用ループ（後で戻す用）:
+        # テスト用：一度だけ実行（本番用ループは下にコメントで残す）
         # while True:
-        #     実行処理
-        #     time_module.sleep(300)
-
-        # ↓ テスト用：一度だけ実行
         now_utc = datetime.utcnow()
         now_jst = now_utc + timedelta(hours=9)
         now_est = now_utc - timedelta(hours=4)
-
-        is_japan_time = now_jst.weekday() < 5 and time(9, 0) <= now_jst.time() <= time(15, 0)
-        is_us_time = now_est.weekday() < 5 and time(9, 30) <= now_est.time() <= time(16, 0)
 
         print("ループ実行:", datetime.now(), flush=True)
 
@@ -120,19 +148,19 @@ def main_loop():
         print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄", flush=True)
 
         for uid, (user, symbols) in user_map.items():
-            msgs = []
+            results = []
             for sym in symbols:
                 actual = sym + ".T" if sym[0].isdigit() else sym
                 df = cache.get(actual)
                 if df is not None:
-                    msg = detect_cross(df, sym)
-                    if msg:
-                        msgs.append(msg)
+                    cross_type = detect_cross(df, sym)
+                    if cross_type:
+                        results.append((sym, cross_type))
 
-            if msgs:
-                body = "\n".join(msgs)
-                send_email(user.email, "クロス検出通知", body)
-                print(f"📧 {user.username} へ通知: {msgs}", flush=True)
+            if results:
+                body = format_email_body(results)
+                send_email(user.email, "【株式テクニカル分析検出通知】", body)
+                print(f"📧 {user.username} へ通知: {results}", flush=True)
 
         db_session.close()
 

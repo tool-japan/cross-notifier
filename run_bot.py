@@ -1,4 +1,4 @@
-# ✅ メール本文と件名をアップグレードした run_bot.py（銘柄名・リンク付き）
+# ✅ デイトレード向けに最適化した run_bot.py（5分足 + EMA5/EMA12 使用）
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -38,11 +38,11 @@ def send_email(to_email, subject, body):
         print("メール送信エラー:", e, flush=True)
 
 def detect_cross(df, symbol):
-    df["EMA9"] = df["Close"].ewm(span=9).mean()
-    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    df["EMA5"] = df["Close"].ewm(span=5).mean()
+    df["EMA12"] = df["Close"].ewm(span=12).mean()
     df["Signal"] = 0
-    df.loc[df["EMA9"] > df["EMA20"], "Signal"] = 1
-    df.loc[df["EMA9"] < df["EMA20"], "Signal"] = -1
+    df.loc[df["EMA5"] > df["EMA12"], "Signal"] = 1
+    df.loc[df["EMA5"] < df["EMA12"], "Signal"] = -1
     df["Cross"] = df["Signal"].diff()
 
     if df["Cross"].iloc[-1] == 2:
@@ -131,7 +131,7 @@ def main_loop():
             for sym in batch_syms:
                 try:
                     print(f"Downloading: {sym}", flush=True)
-                    df = yf.download(sym, period="20d", interval="1d", progress=False)
+                    df = yf.download(sym, period="2d", interval="5m", progress=False)
                     if not df.empty:
                         cache[sym] = df
                         access_count += 1

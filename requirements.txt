@@ -12,3 +12,4 @@ jpholiday
 pytz
 sendgrid
 holidays
+numpy>=1.21.0,<1.26

@@ -16,6 +16,9 @@ from models import db, User
 
 # Flask & 環境設定
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")  # ←必要ならこれも入れて
+db.init_app(app)
+
 load_dotenv()
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")

@@ -1,3 +1,4 @@
+# ✅ 完全版 run_bot.py（戦略コメント付き・可視化対応済み）
 import os
 import time as time_module
 from datetime import datetime, timedelta
@@ -19,21 +20,32 @@ load_dotenv()
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 
-# 実行戦略マップ
+# ⏰ 実行戦略マップ（時刻ごとに可視化）
 TIME_STRATEGY_MAP = {
+    # ▶ 09:10 戦略
     "09:10": "オープニング逆張りスナイパー",
+
+    # ▶ 09:40 戦略
     "09:40": "モーニングトレンドハンター",
+
+    # ▶ 10:05 / 10:30 戦略（2つ同じ）
     "10:05": "ボリュームライディングブレイカー",
     "10:30": "ボリュームライディングブレイカー",
+
+    # ▶ 11:00 戦略
     "11:00": "サイレント・ゾーン・スキャナー",
-    "12:40": "リバーサル・シーカー",
+
+    # ▶ 後場の反転シグナル
+    "12:55": "リバーサル・シーカー", #40
     "13:10": "リバーサル・シーカー",
     "13:40": "リバーサル・シーカー",
+
+    # ▶ 引け前の急騰シグナル
     "14:10": "クロージング・サージ・スナイパー",
     "14:30": "クロージング・サージ・スナイパー"
 }
 
-# メール送信
+# 📩 メール送信
 
 def send_email(to_email, subject, body):
     message = Mail(from_email=SENDGRID_FROM_EMAIL, to_emails=to_email, subject=subject, plain_text_content=body)
@@ -44,15 +56,58 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
-# テクニカル戦略ロジック群
+# 🔍 テクニカル戦略ロジック群
 
-def detect_closing_surge(df):
+# オープニング逆張りスナイパー：RSI + ストキャスティクス
+# 条件：RSI < 30 かつ ストキャスK < 20 → 買いシグナル（逆もあり）
+def detect_rsi_stoch_signal(df):
     df = df.copy()
-    df["Vol_Avg"] = df["Volume"].rolling(window=20).mean()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    stoch = ta.stoch(df["High"], df["Low"], df["Close"], k=14, d=3)
+    df[["STOCH_K", "STOCH_D"]] = stoch.values
     latest = df.dropna().iloc[-1]
-    ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
-    return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性" if ratio > 2 else None
+    if latest.RSI < 30 and latest.STOCH_K < 20:
+        return "RSI+ストキャスで売られすぎ → 買いシグナル"
+    elif latest.RSI > 70 and latest.STOCH_K > 80:
+        return "RSI+ストキャスで買われすぎ → 売りシグナル"
+    return None
 
+# モーニングトレンドハンター：移動平均 + RSI
+# 条件：SMA5 > SMA10 かつ RSI > 50 → 上昇トレンド継続中
+
+def detect_ma_rsi_signal(df):
+    df = df.copy()
+    df["SMA5"] = df["Close"].rolling(5).mean()
+    df["SMA10"] = df["Close"].rolling(10).mean()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    latest = df.dropna().iloc[-1]
+    if latest.SMA5 > latest.SMA10 and latest.RSI > 50:
+        return "移動平均5>10 & RSI高 → 上昇トレンド継続中（買い）"
+    elif latest.SMA5 < latest.SMA10 and latest.RSI < 50:
+        return "移動平均5<10 & RSI低 → 下降トレンド継続中（売り）"
+    return None
+
+# ボリュームライディングブレイカー：出来高 + RSI + 高値ブレイク
+def detect_volume_rsi_breakout(df):
+    df = df.copy()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    df["Vol_Avg"] = df["Volume"].rolling(10).mean()
+    high_break = df["Close"] > df["High"].shift(1).rolling(10).max()
+    latest = df.dropna().iloc[-1]
+    if latest.Volume > latest.Vol_Avg * 1.5:
+        if latest.RSI > 50 and high_break.iloc[-1]:
+            return "出来高急増 + 高値ブレイク + RSI高 → 強い買いシグナル"
+        elif latest.RSI < 50:
+            return "出来高急増 + RSI低 → 売り圧力シグナル"
+    return None
+
+# サイレント・ゾーン・スキャナー：ATRによるボラティリティ判断
+def detect_atr_low_volatility(df):
+    df = df.copy()
+    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
+
+# リバーサル・シーカー：MACDによる反転/継続判断
 def detect_macd_reversal(df):
     df = df.copy()
     macd = ta.macd(df['Close'])
@@ -70,49 +125,15 @@ def detect_macd_reversal(df):
         return "MACD乖離拡大中 → 下降トレンド継続中"
     return None
 
-def detect_rsi_stoch_signal(df):
+# クロージング・サージ・スナイパー：出来高急増シグナル
+def detect_closing_surge(df):
     df = df.copy()
-    df["RSI"] = ta.rsi(df["Close"], length=14)
-    stoch = ta.stoch(df["High"], df["Low"], df["Close"], k=14, d=3)
-    df[["STOCH_K", "STOCH_D"]] = stoch.values
+    df["Vol_Avg"] = df["Volume"].rolling(window=20).mean()
     latest = df.dropna().iloc[-1]
-    if latest.RSI < 30 and latest.STOCH_K < 20:
-        return "RSI+ストキャスで売られすぎ → 買いシグナル"
-    elif latest.RSI > 70 and latest.STOCH_K > 80:
-        return "RSI+ストキャスで買われすぎ → 売りシグナル"
-    return None
+    ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
+    return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性" if ratio > 2 else None
 
-def detect_ma_rsi_signal(df):
-    df = df.copy()
-    df["SMA5"] = df["Close"].rolling(5).mean()
-    df["SMA10"] = df["Close"].rolling(10).mean()
-    df["RSI"] = ta.rsi(df["Close"], length=14)
-    latest = df.dropna().iloc[-1]
-    if latest.SMA5 > latest.SMA10 and latest.RSI > 50:
-        return "移動平均5>10 & RSI高 → 上昇トレンド継続中（買い）"
-    elif latest.SMA5 < latest.SMA10 and latest.RSI < 50:
-        return "移動平均5<10 & RSI低 → 下降トレンド継続中（売り）"
-    return None
-
-def detect_volume_rsi_breakout(df):
-    df = df.copy()
-    df["RSI"] = ta.rsi(df["Close"], length=14)
-    df["Vol_Avg"] = df["Volume"].rolling(10).mean()
-    high_break = df["Close"] > df["High"].shift(1).rolling(10).max()
-    latest = df.dropna().iloc[-1]
-    if latest.Volume > latest.Vol_Avg * 1.5:
-        if latest.RSI > 50 and high_break.iloc[-1]:
-            return "出来高急増 + 高値ブレイク + RSI高 → 強い買いシグナル"
-        elif latest.RSI < 50:
-            return "出来高急増 + RSI低 → 売り圧力シグナル"
-    return None
-
-def detect_atr_low_volatility(df):
-    df = df.copy()
-    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
-
-# 汎用ユーティリティ
+# 🧰 ユーティリティ関数群
 
 def batch(iterable, size):
     it = iter(iterable)
@@ -137,20 +158,26 @@ def format_email_body(results, strategy_name):
         body += f"\n{symbol}\n{signal}\n{name}\n{url}\n"
     return body.strip()
 
-# メインループ
-
+# 🔁 メインループ（±2分対応）
 def main_loop():
     now = datetime.utcnow() + timedelta(hours=9)
-    now_str = now.strftime("%H:%M")
-    if now_str not in TIME_STRATEGY_MAP:
-        print(f"⏸ 現在の時刻 {now_str} は戦略対象外", flush=True)
+    hour = now.strftime("%H")
+    minute = now.minute
+    candidates = [f"{hour}:{(minute + offset) % 60:02d}" for offset in [-2, -1, 0, 1, 2]]
+    strategy_name = None
+    for t in candidates:
+        if t in TIME_STRATEGY_MAP:
+            strategy_name = TIME_STRATEGY_MAP[t]
+            break
+
+    if not strategy_name:
+        print(f"⏸ 現在の時刻 {now.strftime('%H:%M')} は戦略対象外です", flush=True)
         return
 
     if now.weekday() >= 5 or now.date() in holidays.Japan():
         print("⏸ 日本の休日または週末のためスキップ", flush=True)
         return
 
-    strategy_name = TIME_STRATEGY_MAP[now_str]
     print(f"🚀 現在の戦略: {strategy_name}", flush=True)
 
     with app.app_context():
@@ -186,20 +213,21 @@ def main_loop():
             results = []
             for sym in symbols:
                 df = cache.get(sym + ".T")
-                if not df: continue
+                if not df:
+                    continue
 
                 signal = None
-                if now_str == "09:10":
+                if strategy_name == "オープニング逆張りスナイパー":
                     signal = detect_rsi_stoch_signal(df)
-                elif now_str == "09:40":
+                elif strategy_name == "モーニングトレンドハンター":
                     signal = detect_ma_rsi_signal(df)
-                elif now_str in ["10:05", "10:30"]:
+                elif strategy_name == "ボリュームライディングブレイカー":
                     signal = detect_volume_rsi_breakout(df)
-                elif now_str == "11:00":
+                elif strategy_name == "サイレント・ゾーン・スキャナー":
                     signal = detect_atr_low_volatility(df)
-                elif now_str in ["12:40", "13:10", "13:40"]:
+                elif strategy_name == "リバーサル・シーカー":
                     signal = detect_macd_reversal(df)
-                elif now_str in ["14:10", "14:30"]:
+                elif strategy_name == "クロージング・サージ・スナイパー":
                     signal = detect_closing_surge(df)
 
                 if signal:

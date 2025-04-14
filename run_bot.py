@@ -1,4 +1,3 @@
-# ✅ 完全版 run_bot.py（MACD None対応済み）
 import os
 import time as time_module
 from datetime import datetime, timedelta
@@ -23,7 +22,7 @@ load_dotenv()
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 
-# ⏰ 実行戦略マップ（時刻ごとに可視化）
+# ⏰ 実行戦略マップ
 TIME_STRATEGY_MAP = {
     "09:10": "オープニング逆張りスナイパー",
     "09:40": "モーニングトレンドハンター",
@@ -31,13 +30,13 @@ TIME_STRATEGY_MAP = {
     "10:30": "ボリュームライディングブレイカー",
     "11:00": "サイレント・ゾーン・スキャナー",
     "12:40": "リバーサル・シーカー",
-    "13:52": "リバーサル・シーカー", #10
+    "13:10": "リバーサル・シーカー",
     "13:30": "リバーサル・シーカー",
     "14:10": "クロージング・サージ・スナイパー",
     "14:30": "クロージング・サージ・スナイパー"
 }
 
-# 📩 メール送信
+# メール送信
 def send_email(to_email, subject, body):
     message = Mail(from_email=SENDGRID_FROM_EMAIL, to_emails=to_email, subject=subject, plain_text_content=body)
     try:
@@ -47,8 +46,7 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
-# 🔍 テクニカル戦略ロジック群
-
+# 各戦略のテクニカルロジック
 def detect_rsi_stoch_signal(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
@@ -118,8 +116,7 @@ def detect_closing_surge(df):
     ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
     return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性" if ratio > 2 else None
 
-# 🧰 ユーティリティ関数群
-
+# ユーティリティ
 def batch(iterable, size):
     it = iter(iterable)
     while True:
@@ -143,7 +140,7 @@ def format_email_body(results, strategy_name):
         body += f"\n{symbol}\n{signal}\n{name}\n{url}\n"
     return body.strip()
 
-# 🔁 メインループ（±2分対応）
+# メインループ（±2分対応 + シグナル無し表示）
 def main_loop():
     now = datetime.utcnow() + timedelta(hours=9)
     hour = now.strftime("%H")
@@ -199,6 +196,7 @@ def main_loop():
             for sym in symbols:
                 df = cache.get(sym + ".T")
                 if df is None or df.empty:
+                    print(f"⚠️ {sym} のデータが取得できませんでした", flush=True)
                     continue
 
                 signal = None
@@ -217,6 +215,8 @@ def main_loop():
 
                 if signal:
                     results.append((sym, signal))
+                else:
+                    print(f"🔍 {sym} → シグナルなし", flush=True)
 
             if results:
                 body = format_email_body(results, strategy_name)

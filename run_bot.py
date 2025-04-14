@@ -1,4 +1,4 @@
-# ✅ 強度レベル付きクロス判定 & メール送信時刻を本文冒頭に追加（完全版）
+# ✅ サマータイム対応 + 日本・米国祝日考慮 + 30分間隔実行（完全版 run_bot.py）
 import os
 from datetime import datetime, timedelta, time
 import time as time_module
@@ -9,31 +9,30 @@ from email.mime.text import MIMEText
 from flask import Flask
 from sqlalchemy.orm import scoped_session, sessionmaker
 from dotenv import load_dotenv
+import holidays
+from zoneinfo import ZoneInfo
 
 from models import db, User
 
 load_dotenv()
 
-SES_SMTP_USER = os.environ.get("SES_SMTP_USER")
-SES_SMTP_PASSWORD = os.environ.get("SES_SMTP_PASSWORD")
-SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
-db.init_app(app)
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 def send_email(to_email, subject, body):
-    msg = MIMEText(body)
-    msg['Subject'] = subject
-    msg['From'] = SES_FROM_EMAIL
-    msg['To'] = to_email
+    message = Mail(
+        from_email=SENDGRID_FROM_EMAIL,
+        to_emails=to_email,
+        subject=subject,
+        plain_text_content=body
+    )
     try:
-        server = smtplib.SMTP('email-smtp.us-east-1.amazonaws.com', 587)
-        server.starttls()
-        server.login(SES_SMTP_USER, SES_SMTP_PASSWORD)
-        server.sendmail(SES_FROM_EMAIL, to_email, msg.as_string())
-        server.quit()
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        print(f"✅ メール送信成功: {to_email} {response.status_code}")
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
@@ -102,15 +101,33 @@ def format_email_body(results):
 
     return body.strip()
 
+def is_within_schedule():
+    now_utc = datetime.utcnow()
+    now_jst = now_utc + timedelta(hours=9)
+    now_ny = datetime.now(ZoneInfo("America/New_York"))
+    jst_time = now_jst.time()
+    ny_time = now_ny.time()
+
+    jp_holidays = holidays.Japan()
+    us_holidays = holidays.US()
+
+    is_jp_weekday = now_jst.weekday() < 5 and now_jst.date() not in jp_holidays
+    is_us_weekday = now_ny.weekday() < 5 and now_ny.date() not in us_holidays
+
+    is_jp_time = is_jp_weekday and time(8,30) <= jst_time <= time(15,0)
+    is_us_time = is_us_weekday and time(9,0) <= ny_time <= time(15,30)  # NY時間で判定
+
+    is_30min_timing = now_jst.minute in [0, 30]
+
+    return (is_jp_time or is_us_time) and is_30min_timing
+
 def main_loop():
+    if not is_within_schedule():
+        print("⏸ 実行対象外の時間帯または祝日のためスキップ", flush=True)
+        return
+
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
-
-        # テスト用：一度だけ実行（本番用ループは下にコメントで残す）
-        # while True:
-        now_utc = datetime.utcnow()
-        now_jst = now_utc + timedelta(hours=9)
-        now_est = now_utc - timedelta(hours=4)
 
         print("ループ実行:", datetime.now(), flush=True)
 

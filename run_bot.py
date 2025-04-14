@@ -1,4 +1,4 @@
-# ✅ 完全版 run_bot.py（MACD戦略含む）
+# ✅ 完全版 run_bot.py（MACD None対応済み）
 import os
 import time as time_module
 from datetime import datetime, timedelta
@@ -32,7 +32,7 @@ TIME_STRATEGY_MAP = {
     "11:00": "サイレント・ゾーン・スキャナー",
     "12:40": "リバーサル・シーカー",
     "13:10": "リバーサル・シーカー",
-    "13:47": "リバーサル・シーカー", #30
+    "13:30": "リバーサル・シーカー",
     "14:10": "クロージング・サージ・スナイパー",
     "14:30": "クロージング・サージ・スナイパー"
 }
@@ -94,6 +94,8 @@ def detect_atr_low_volatility(df):
 def detect_macd_reversal(df):
     df = df.copy()
     macd = ta.macd(df['Close'])
+    if macd is None or macd.isnull().values.any():
+        return None
     df[['MACD', 'Signal', 'Hist']] = macd.values
     df = df.dropna()
     if len(df) < 2:
@@ -117,6 +119,7 @@ def detect_closing_surge(df):
     return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性" if ratio > 2 else None
 
 # 🧰 ユーティリティ関数群
+
 def batch(iterable, size):
     it = iter(iterable)
     while True:

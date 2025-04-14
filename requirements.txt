@@ -11,3 +11,4 @@ python-dotenv
 jpholiday
 pytz
 sendgrid
+holidays

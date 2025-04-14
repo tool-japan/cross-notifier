@@ -1,34 +1,42 @@
-# ✅ サマータイム対応 + 日本・米国祝日考慮 + 30分間隔実行（完全版 run_bot.py）
 import os
-from datetime import datetime, timedelta, time
 import time as time_module
-import yfinance as yf
-import pandas as pd
-import smtplib
-from email.mime.text import MIMEText
+from datetime import datetime, timedelta
 from flask import Flask
 from sqlalchemy.orm import scoped_session, sessionmaker
 from dotenv import load_dotenv
-import holidays
 from zoneinfo import ZoneInfo
-
+import holidays
+import pandas as pd
+import yfinance as yf
+import pandas_ta as ta
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from models import db, User
 
+# Flask & 環境設定
+app = Flask(__name__)
 load_dotenv()
-
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+# 実行戦略マップ
+TIME_STRATEGY_MAP = {
+    "09:10": "オープニング逆張りスナイパー",
+    "09:40": "モーニングトレンドハンター",
+    "10:05": "ボリュームライディングブレイカー",
+    "10:30": "ボリュームライディングブレイカー",
+    "11:00": "サイレント・ゾーン・スキャナー",
+    "12:40": "リバーサル・シーカー",
+    "13:10": "リバーサル・シーカー",
+    "13:40": "リバーサル・シーカー",
+    "14:10": "クロージング・サージ・スナイパー",
+    "14:30": "クロージング・サージ・スナイパー"
+}
+
+# メール送信
 
 def send_email(to_email, subject, body):
-    message = Mail(
-        from_email=SENDGRID_FROM_EMAIL,
-        to_emails=to_email,
-        subject=subject,
-        plain_text_content=body
-    )
+    message = Mail(from_email=SENDGRID_FROM_EMAIL, to_emails=to_email, subject=subject, plain_text_content=body)
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
@@ -36,23 +44,75 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
-def detect_cross(df, symbol):
-    df["EMA5"] = df["Close"].ewm(span=5).mean()
-    df["EMA12"] = df["Close"].ewm(span=12).mean()
-    df["Signal"] = 0
-    df.loc[df["EMA5"] > df["EMA12"], "Signal"] = 1
-    df.loc[df["EMA5"] < df["EMA12"], "Signal"] = -1
-    df["Cross"] = df["Signal"].diff()
+# テクニカル戦略ロジック群
 
-    diff = abs(df["EMA5"].iloc[-1] - df["EMA12"].iloc[-1])
+def detect_closing_surge(df):
+    df = df.copy()
+    df["Vol_Avg"] = df["Volume"].rolling(window=20).mean()
+    latest = df.dropna().iloc[-1]
+    ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
+    return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性" if ratio > 2 else None
 
-    if df["Cross"].iloc[-1] == 2:
-        level = "強" if diff > 1.0 else "弱"
-        return f"ゴールデンクロス（{level}）"
-    elif df["Cross"].iloc[-1] == -2:
-        level = "強" if diff > 1.0 else "弱"
-        return f"デッドクロス（{level}）"
+def detect_macd_reversal(df):
+    df = df.copy()
+    macd = ta.macd(df['Close'])
+    df[['MACD', 'Signal', 'Hist']] = macd.values
+    df = df.dropna()
+    if len(df) < 2: return None
+    prev, curr = df.iloc[-2], df.iloc[-1]
+    if prev.MACD < prev.Signal and curr.MACD > curr.Signal:
+        return "MACDゴールデンクロス → 上昇反転シグナル"
+    elif prev.MACD > prev.Signal and curr.MACD < curr.Signal:
+        return "MACDデッドクロス → 下降反転シグナル"
+    elif curr.MACD > curr.Signal and (curr.MACD - curr.Signal) > (prev.MACD - prev.Signal):
+        return "MACD乖離拡大中 → 上昇トレンド継続中"
+    elif curr.MACD < curr.Signal and (prev.MACD - prev.Signal) > (curr.MACD - curr.Signal):
+        return "MACD乖離拡大中 → 下降トレンド継続中"
     return None
+
+def detect_rsi_stoch_signal(df):
+    df = df.copy()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    stoch = ta.stoch(df["High"], df["Low"], df["Close"], k=14, d=3)
+    df[["STOCH_K", "STOCH_D"]] = stoch.values
+    latest = df.dropna().iloc[-1]
+    if latest.RSI < 30 and latest.STOCH_K < 20:
+        return "RSI+ストキャスで売られすぎ → 買いシグナル"
+    elif latest.RSI > 70 and latest.STOCH_K > 80:
+        return "RSI+ストキャスで買われすぎ → 売りシグナル"
+    return None
+
+def detect_ma_rsi_signal(df):
+    df = df.copy()
+    df["SMA5"] = df["Close"].rolling(5).mean()
+    df["SMA10"] = df["Close"].rolling(10).mean()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    latest = df.dropna().iloc[-1]
+    if latest.SMA5 > latest.SMA10 and latest.RSI > 50:
+        return "移動平均5>10 & RSI高 → 上昇トレンド継続中（買い）"
+    elif latest.SMA5 < latest.SMA10 and latest.RSI < 50:
+        return "移動平均5<10 & RSI低 → 下降トレンド継続中（売り）"
+    return None
+
+def detect_volume_rsi_breakout(df):
+    df = df.copy()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    df["Vol_Avg"] = df["Volume"].rolling(10).mean()
+    high_break = df["Close"] > df["High"].shift(1).rolling(10).max()
+    latest = df.dropna().iloc[-1]
+    if latest.Volume > latest.Vol_Avg * 1.5:
+        if latest.RSI > 50 and high_break.iloc[-1]:
+            return "出来高急増 + 高値ブレイク + RSI高 → 強い買いシグナル"
+        elif latest.RSI < 50:
+            return "出来高急増 + RSI低 → 売り圧力シグナル"
+    return None
+
+def detect_atr_low_volatility(df):
+    df = df.copy()
+    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
+
+# 汎用ユーティリティ
 
 def batch(iterable, size):
     it = iter(iterable)
@@ -63,127 +123,90 @@ def batch(iterable, size):
             break
         yield chunk
 
-def format_email_body(results):
-    jp = []
-    us = []
+def format_email_body(results, strategy_name):
     now_jst = datetime.utcnow() + timedelta(hours=9)
     timestamp = now_jst.strftime("%Y-%m-%d %H:%M:%S")
-    header = f"通知時刻（日本時間）: {timestamp}\n"
-
-    for symbol, cross_type in results:
-        is_jp = symbol[0].isdigit()
-        symbol_with_suffix = symbol + ".T" if is_jp else symbol
-
+    body = f"\n【戦略】{strategy_name}\n通知時刻（日本時間）: {timestamp}\n"
+    for symbol, signal in results:
+        full = symbol + ".T"
         try:
-            info = yf.Ticker(symbol_with_suffix).info
-            name = info.get("longName", "名称不明")
-        except Exception:
+            name = yf.Ticker(full).info.get("longName", "名称不明")
+        except:
             name = "名称取得失敗"
-
-        signal = "買い気配" if "ゴールデンクロス" in cross_type else "売り気配"
-        url = f"https://finance.yahoo.co.jp/quote/{symbol_with_suffix}"
-
-        line = f"""{symbol}
-{cross_type}→{signal}
-{name}
-{url}
-"""
-        if is_jp:
-            jp.append(line)
-        else:
-            us.append(line)
-
-    body = header + "\n"
-    if jp:
-        body += "国内株式\n" + "\n".join(jp) + "\n"
-    if us:
-        body += "米国株式\n" + "\n".join(us)
-
+        url = f"https://finance.yahoo.co.jp/quote/{full}"
+        body += f"\n{symbol}\n{signal}\n{name}\n{url}\n"
     return body.strip()
 
-def is_within_schedule():
-    now_utc = datetime.utcnow()
-    now_jst = now_utc + timedelta(hours=9)
-    now_ny = datetime.now(ZoneInfo("America/New_York"))
-    jst_time = now_jst.time()
-    ny_time = now_ny.time()
-
-    jp_holidays = holidays.Japan()
-    us_holidays = holidays.US()
-
-    is_jp_weekday = now_jst.weekday() < 5 and now_jst.date() not in jp_holidays
-    is_us_weekday = now_ny.weekday() < 5 and now_ny.date() not in us_holidays
-
-    is_jp_time = is_jp_weekday and time(8,30) <= jst_time <= time(15,0)
-    is_us_time = is_us_weekday and time(9,0) <= ny_time <= time(15,30)  # NY時間で判定
-
-    is_30min_timing = now_jst.minute in [0, 30]
-
-    return (is_jp_time or is_us_time) and is_30min_timing
+# メインループ
 
 def main_loop():
-    if not is_within_schedule():
-        print("⏸ 実行対象外の時間帯または祝日のためスキップ", flush=True)
+    now = datetime.utcnow() + timedelta(hours=9)
+    now_str = now.strftime("%H:%M")
+    if now_str not in TIME_STRATEGY_MAP:
+        print(f"⏸ 現在の時刻 {now_str} は戦略対象外", flush=True)
         return
+
+    if now.weekday() >= 5 or now.date() in holidays.Japan():
+        print("⏸ 日本の休日または週末のためスキップ", flush=True)
+        return
+
+    strategy_name = TIME_STRATEGY_MAP[now_str]
+    print(f"🚀 現在の戦略: {strategy_name}", flush=True)
 
     with app.app_context():
         Session = scoped_session(sessionmaker(bind=db.engine))
-
-        print("ループ実行:", datetime.now(), flush=True)
-
         db_session = Session()
+
         users = db_session.query(User).filter_by(notify_enabled=True).all()
-        all_symbols = set()
-        user_map = {}
+        user_map, all_symbols = {}, set()
 
         for u in users:
-            syms = [s.strip() for s in u.symbols.splitlines() if s.strip()]
+            syms = [s.strip() for s in u.symbols.splitlines() if s.strip() and s[0].isdigit()]
             user_map[u.id] = (u, syms)
             all_symbols.update(syms)
 
-        japan_symbols = {s for s in all_symbols if s[0].isdigit()}
-        us_symbols = {s for s in all_symbols if s[0].isalpha()}
+        symbols_to_fetch = [s + ".T" for s in all_symbols]
+        cache, access_count = {}, 0
 
-        symbols_to_fetch = set()
-        symbols_to_fetch.update([s + ".T" for s in japan_symbols])
-        symbols_to_fetch.update(us_symbols)
-
-        print(f"{datetime.now()} - 処理対象シンボル数: {len(symbols_to_fetch)} 件", flush=True)
-
-        cache = {}
-        access_count = 0
-        for batch_syms in batch(symbols_to_fetch, 10):
-            for sym in batch_syms:
+        for syms in batch(symbols_to_fetch, 10):
+            for sym in syms:
                 try:
-                    print(f"Downloading: {sym}", flush=True)
+                    print(f"📥 Downloading: {sym}", flush=True)
                     df = yf.download(sym, period="2d", interval="5m", progress=False)
                     if not df.empty:
                         cache[sym] = df
                         access_count += 1
                         if access_count % 100 == 0:
-                            print("🔄 100件取得完了、5秒待機...", flush=True)
+                            print("🔄 100件取得、5秒待機", flush=True)
                             time_module.sleep(5)
                 except Exception as e:
-                    print(f"エラー（{sym}）: {e}", flush=True)
-
-        failed_symbols = [sym for sym in symbols_to_fetch if sym not in cache]
-        if failed_symbols:
-            print(f"{datetime.now()} - ⚠️ Yahoo取得失敗: {len(failed_symbols)}銘柄 → {failed_symbols}", flush=True)
-
-        print(f"{datetime.now()} - Yahoo取得成功: {len(cache)}銘柄 / ユーザー登録合計: {len(all_symbols)}銘柄", flush=True)
+                    print(f"❌ エラー({sym}): {e}", flush=True)
 
         for uid, (user, symbols) in user_map.items():
             results = []
             for sym in symbols:
-                actual = sym + ".T" if sym[0].isdigit() else sym
-                df = cache.get(actual)
-                if df is not None:
-                    cross_type = detect_cross(df, sym)
-                    if cross_type:
-                        results.append((sym, cross_type))
+                df = cache.get(sym + ".T")
+                if not df: continue
+
+                signal = None
+                if now_str == "09:10":
+                    signal = detect_rsi_stoch_signal(df)
+                elif now_str == "09:40":
+                    signal = detect_ma_rsi_signal(df)
+                elif now_str in ["10:05", "10:30"]:
+                    signal = detect_volume_rsi_breakout(df)
+                elif now_str == "11:00":
+                    signal = detect_atr_low_volatility(df)
+                elif now_str in ["12:40", "13:10", "13:40"]:
+                    signal = detect_macd_reversal(df)
+                elif now_str in ["14:10", "14:30"]:
+                    signal = detect_closing_surge(df)
+
+                if signal:
+                    results.append((sym, signal))
 
             if results:
-                body = format_email_body(results)
+                body = format_email_body(results, strategy_name)
                 send_email(user.email, "【株式テクニカル分析検出通知】", body)
                 print(f"📧 {user.username} へ通知: {results}", flush=True)
 

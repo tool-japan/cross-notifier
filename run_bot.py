@@ -51,8 +51,13 @@ def detect_rsi_stoch_signal(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
     stoch = ta.stoch(df["High"], df["Low"], df["Close"], k=14, d=3)
+
+    if stoch is None or stoch.isnull().values.any():
+        return None
+
     df[["STOCH_K", "STOCH_D"]] = stoch.values
     latest = df.dropna().iloc[-1]
+
     if latest.RSI < 30 and latest.STOCH_K < 20:
         return "RSI+ストキャスで売られすぎ → 買いシグナル"
     elif latest.RSI > 70 and latest.STOCH_K > 80:

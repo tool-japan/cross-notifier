@@ -31,7 +31,7 @@ TIME_STRATEGY_MAP = {
     "11:00": "サイレント・ゾーン・スキャナー",
     "12:40": "リバーサル・シーカー",
     "13:05": "リバーサル・シーカー", #13:10
-    "13:53": "リバーサル・シーカー", #13:30
+    "14:03": "リバーサル・シーカー", #13:30
     "14:10": "クロージング・サージ・スナイパー",
     "14:30": "クロージング・サージ・スナイパー"
 }
@@ -46,7 +46,8 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
-# ✅ RSI + ストキャスでの売られすぎ検出（条件緩和版）
+# ✅ RSI + ストキャスでの超ゆる買いシグナル
+
 def detect_rsi_stoch_signal(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
@@ -58,13 +59,14 @@ def detect_rsi_stoch_signal(df):
     df[["STOCH_K", "STOCH_D"]] = stoch.values
     latest = df.dropna().iloc[-1]
 
-    # 🎯 売られすぎ緩和条件（RSI < 40、ストキャスK < 30）
-    if latest.RSI < 40 and latest.STOCH_K < 30:
-        return "RSI+ストキャスで売られすぎ（緩め） → 買いシグナル"
+    # 🎯 RSI < 50 & ストキャスK < 50 → ちょっと下がってるかも！？
+    if latest.RSI < 50 and latest.STOCH_K < 50:
+        return "RSI+ストキャス弱気圏 → チャンスの兆しかも"
 
     return None
 
-# ✅ SMA + RSI による買い継続シグナル（RSI条件緩和）
+# ✅ SMA + RSI 弱い買い傾向でも通知
+
 def detect_ma_rsi_signal(df):
     df = df.copy()
     df["SMA5"] = df["Close"].rolling(5).mean()
@@ -72,29 +74,28 @@ def detect_ma_rsi_signal(df):
     df["RSI"] = ta.rsi(df["Close"], length=14)
     latest = df.dropna().iloc[-1]
 
-    if latest.SMA5 > latest.SMA10 and latest.RSI > 45:
-        return "移動平均5>10 & RSIやや強気 → 上昇継続の買いシグナル"
+    # 🎯 SMA5 ≧ SMA10 & RSI > 40
+    if latest.SMA5 >= latest.SMA10 and latest.RSI > 40:
+        return "移動平均が交差気味 & RSIやや上向き → 弱めの買いシグナル"
 
     return None
+
+# ✅ 出来高 + RSI + 高値ブレイク（条件ゆるめ）
 
 def detect_volume_rsi_breakout(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
     df["Vol_Avg"] = df["Volume"].rolling(10).mean()
-    high_break = df["Close"] > df["High"].shift(1).rolling(10).max()
+    high_break = df["Close"] >= df["High"].shift(1).rolling(10).max() * 0.995
     latest = df.dropna().iloc[-1]
 
-    if latest.Volume > latest.Vol_Avg * 1.2 and latest.RSI > 45 and high_break.iloc[-1]:
-        return "出来高↑ + 高値更新 + RSIやや強気 → 買いシグナル"
+    if latest.Volume > latest.Vol_Avg * 1.1 and latest.RSI > 40 and high_break.iloc[-1]:
+        return "出来高↑ + 高値接近 + RSIやや強 → ゆる買いサイン"
 
     return None
 
-def detect_atr_low_volatility(df):
-    df = df.copy()
-    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
+# ✅ MACDでの上昇転換・継続シグナル（緩め）
 
-# ✅ MACDでの上昇転換・継続シグナル（乖離条件を緩める）
 def detect_macd_reversal(df):
     df = df.copy()
     macd = ta.macd(df['Close'])
@@ -109,30 +110,32 @@ def detect_macd_reversal(df):
         return None
 
     prev, curr = df.iloc[-2], df.iloc[-1]
-    prev_diff = prev.MACD - prev.Signal
-    curr_diff = curr.MACD - curr.Signal
 
-    # 🎯 上昇反転の可能性（ゴールデンクロス）
-    if prev.MACD < prev.Signal and curr.MACD > curr.Signal:
-        return "MACDゴールデンクロス → 上昇反転の兆候"
-
-    # 🎯 乖離が横ばい〜やや拡大でも許容（拡大緩和）
-    if curr.MACD > curr.Signal and curr_diff >= prev_diff:
-        return "MACD乖離安定〜拡大 → 買いトレンド継続の可能性"
+    if curr.MACD > curr.Signal:
+        return "MACD微差で上 → 弱めの上昇シグナル"
 
     return None
 
-# ✅ 引け前に出来高が急増している銘柄を検出（2倍 → 1.5倍に緩和）
+# ✅ 引け前に出来高が急増している銘柄を検出（2倍 → 1.2倍に緩和）
+
 def detect_closing_surge(df):
     df = df.copy()
     df["Vol_Avg"] = df["Volume"].rolling(window=20).mean()
     latest = df.dropna().iloc[-1]
     ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
 
-    if ratio > 1.5:
-        return f"出来高が平均の{ratio:.1f}倍 → 急騰の兆し（緩和）"
+    if ratio > 1.2:
+        return f"出来高が平均の{ratio:.1f}倍 → ゆる急騰の可能性"
 
     return None
+
+
+def detect_atr_low_volatility(df):
+    df = df.copy()
+    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
+
+
 
 # ユーティリティ
 def batch(iterable, size):

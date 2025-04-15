@@ -31,7 +31,7 @@ TIME_STRATEGY_MAP = {
     "11:00": "サイレント・ゾーン・スキャナー",
     "12:40": "リバーサル・シーカー",
     "13:05": "リバーサル・シーカー", #13:10
-    "14:03": "リバーサル・シーカー", #13:30
+    "14:13": "リバーサル・シーカー", #13:30
     "14:10": "クロージング・サージ・スナイパー",
     "14:30": "クロージング・サージ・スナイパー"
 }
@@ -202,7 +202,7 @@ def main_loop():
             for sym in syms:
                 try:
                     print(f"📥 Downloading: {sym}", flush=True)
-                    df = yf.download(sym, period="2d", interval="5m", progress=False)
+                    df = yf.download(sym, period="5d", interval="5m", progress=False)
                     if not df.empty:
                         cache[sym] = df
                         access_count += 1
@@ -219,7 +219,37 @@ def main_loop():
                 if df is None or df.empty:
                     print(f"⚠️ {sym} のデータが取得できませんでした", flush=True)
                     continue
-
+            
+                df_debug = df.copy()
+            
+                # 👉 RSI確認
+                try:
+                    df_debug["RSI"] = ta.rsi(df_debug["Close"], length=14)
+                    latest_rsi = df_debug["RSI"].dropna().iloc[-1]
+                except:
+                    latest_rsi = "取得失敗"
+            
+                # 👉 MACD確認
+                try:
+                    macd = ta.macd(df_debug["Close"])
+                    df_debug[["MACD", "Signal", "Hist"]] = macd.values
+                    latest_macd = df_debug.dropna().iloc[-1]
+                    macd_val = latest_macd.MACD
+                    signal_val = latest_macd.Signal
+                except:
+                    macd_val = signal_val = "取得失敗"
+            
+                # 👉 出来高平均と比率確認
+                try:
+                    df_debug["Vol_Avg"] = df_debug["Volume"].rolling(20).mean()
+                    latest_vol = df_debug.dropna().iloc[-1]
+                    vol_ratio = latest_vol["Volume"] / latest_vol["Vol_Avg"]
+                except:
+                    vol_ratio = "取得失敗"
+            
+                print(f"🔎 {sym} → RSI: {latest_rsi}, MACD: {macd_val}, Signal: {signal_val}, 出来高比: {vol_ratio:.2f}" if isinstance(vol_ratio, float) else f"🔎 {sym} → ログ取得失敗", flush=True)
+            
+                # 通常のシグナル検出処理
                 signal = None
                 if strategy_name == "オープニング逆張りスナイパー":
                     signal = detect_rsi_stoch_signal(df)
@@ -233,6 +263,7 @@ def main_loop():
                     signal = detect_macd_reversal(df)
                 elif strategy_name == "クロージング・サージ・スナイパー":
                     signal = detect_closing_surge(df)
+
 
                 if signal:
                     results.append((sym, signal))

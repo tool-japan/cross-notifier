@@ -46,7 +46,7 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print("メール送信エラー:", e, flush=True)
 
-# ✅ RSI + ストキャスティクスによる「買い」シグナルのみを検出
+# ✅ RSI + ストキャスでの売られすぎ検出（条件緩和版）
 def detect_rsi_stoch_signal(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
@@ -58,9 +58,9 @@ def detect_rsi_stoch_signal(df):
     df[["STOCH_K", "STOCH_D"]] = stoch.values
     latest = df.dropna().iloc[-1]
 
-    # 🎯 売られすぎシグナル（買いのみ判定）
-    if latest.RSI < 30 and latest.STOCH_K < 20:
-        return "RSI+ストキャスで売られすぎ → 買いシグナル"
+    # 🎯 売られすぎ緩和条件（RSI < 40、ストキャスK < 30）
+    if latest.RSI < 40 and latest.STOCH_K < 30:
+        return "RSI+ストキャスで売られすぎ（緩め） → 買いシグナル"
 
     return None
 

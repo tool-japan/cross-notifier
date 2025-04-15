@@ -98,23 +98,31 @@ def detect_volume_rsi_breakout(df):
 
 def detect_macd_reversal(df):
     df = df.copy()
-    macd = ta.macd(df['Close'])
+    macd = ta.macd(df["Close"])
 
-    if macd is None or macd.isnull().values.any():
+    if macd is None or macd.isnull().values.all():
         return None
 
-    df[['MACD', 'Signal', 'Hist']] = macd.values
-    df = df.dropna()
+    try:
+        df[["MACD", "Signal", "Hist"]] = macd
+        df = df.dropna(subset=["MACD", "Signal"])  # ここ重要！
 
-    if len(df) < 2:
+        if len(df) < 2:
+            return None
+
+        prev, curr = df.iloc[-2], df.iloc[-1]
+
+        if pd.isna(curr.MACD) or pd.isna(curr.Signal):
+            return None
+
+        if curr.MACD > curr.Signal:
+            return "MACD微差で上 → 弱めの上昇シグナル"
+    except Exception as e:
+        print(f"❌ MACDエラー: {e}", flush=True)
         return None
-
-    prev, curr = df.iloc[-2], df.iloc[-1]
-
-    if curr.MACD > curr.Signal:
-        return "MACD微差で上 → 弱めの上昇シグナル"
 
     return None
+
 
 # ✅ 引け前に出来高が急増している銘柄を検出（2倍 → 1.2倍に緩和）
 
@@ -229,15 +237,20 @@ def main_loop():
                 except:
                     latest_rsi = "取得失敗"
             
-                # 👉 MACD確認
+                # 👉 MACD確認（改良版）
                 try:
                     macd = ta.macd(df_debug["Close"])
-                    df_debug[["MACD", "Signal", "Hist"]] = macd.values
-                    latest_macd = df_debug.dropna().iloc[-1]
-                    macd_val = latest_macd.MACD
-                    signal_val = latest_macd.Signal
-                except:
-                    macd_val = signal_val = "取得失敗"
+                    df_debug[["MACD", "Signal", "Hist"]] = macd
+                    df_macd = df_debug.dropna(subset=["MACD", "Signal"])
+                    if len(df_macd) >= 1:
+                        latest_macd = df_macd.iloc[-1]
+                        macd_val = latest_macd.MACD
+                        signal_val = latest_macd.Signal
+                    else:
+                        macd_val = signal_val = "NaN"
+                except Exception as e:
+                    macd_val = signal_val = f"ERR: {e}"
+
             
                 # 👉 出来高平均と比率確認
                 try:

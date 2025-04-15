@@ -24,7 +24,7 @@ SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 
 # ⏰ 実行戦略マップ
 TIME_STRATEGY_MAP = {
-    "13:41": "オープニング逆張りスナイパー", #09:10
+    "13:49": "オープニング逆張りスナイパー", #09:10
     "09:40": "モーニングトレンドハンター",
     "10:05": "ボリュームライディングブレイカー",
     "10:30": "ボリュームライディングブレイカー",
@@ -64,7 +64,7 @@ def detect_rsi_stoch_signal(df):
 
     return None
 
-# ✅ 移動平均（SMA）+ RSI による「買い」トレンド継続シグナルのみを検出
+# ✅ SMA + RSI による買い継続シグナル（RSI条件緩和）
 def detect_ma_rsi_signal(df):
     df = df.copy()
     df["SMA5"] = df["Close"].rolling(5).mean()
@@ -72,13 +72,11 @@ def detect_ma_rsi_signal(df):
     df["RSI"] = ta.rsi(df["Close"], length=14)
     latest = df.dropna().iloc[-1]
 
-    # 🎯 短期が長期を上回り、RSIが強気圏 → 買いトレンド継続
-    if latest.SMA5 > latest.SMA10 and latest.RSI > 50:
-        return "移動平均5>10 & RSI高 → 上昇トレンド継続中（買い）"
+    if latest.SMA5 > latest.SMA10 and latest.RSI > 45:
+        return "移動平均5>10 & RSIやや強気 → 上昇継続の買いシグナル"
 
     return None
 
-# ✅ 出来高 + RSI + 高値ブレイクによる「買い」シグナルのみを検出
 def detect_volume_rsi_breakout(df):
     df = df.copy()
     df["RSI"] = ta.rsi(df["Close"], length=14)
@@ -86,9 +84,8 @@ def detect_volume_rsi_breakout(df):
     high_break = df["Close"] > df["High"].shift(1).rolling(10).max()
     latest = df.dropna().iloc[-1]
 
-    # 🎯 出来高急増 + 高値ブレイク + RSI強気 → 買いシグナル
-    if latest.Volume > latest.Vol_Avg * 1.5 and latest.RSI > 50 and high_break.iloc[-1]:
-        return "出来高急増 + 高値ブレイク + RSI高 → 強い買いシグナル"
+    if latest.Volume > latest.Vol_Avg * 1.2 and latest.RSI > 45 and high_break.iloc[-1]:
+        return "出来高↑ + 高値更新 + RSIやや強気 → 買いシグナル"
 
     return None
 
@@ -97,7 +94,7 @@ def detect_atr_low_volatility(df):
     df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
     return "ATR低下 → ボラティリティ低下と判断" if df["ATR"].iloc[-1] < df["ATR"].iloc[-10:-5].mean() * 0.6 else None
 
-# ✅ MACDのゴールデンクロス・乖離拡大など、買いトレンドに関するシグナルのみを検出
+# ✅ MACDでの上昇転換・継続シグナル（乖離条件を緩める）
 def detect_macd_reversal(df):
     df = df.copy()
     macd = ta.macd(df['Close'])
@@ -112,27 +109,28 @@ def detect_macd_reversal(df):
         return None
 
     prev, curr = df.iloc[-2], df.iloc[-1]
+    prev_diff = prev.MACD - prev.Signal
+    curr_diff = curr.MACD - curr.Signal
 
-    # 🎯 ゴールデンクロス → 上昇反転
+    # 🎯 上昇反転の可能性（ゴールデンクロス）
     if prev.MACD < prev.Signal and curr.MACD > curr.Signal:
-        return "MACDゴールデンクロス → 上昇反転シグナル"
+        return "MACDゴールデンクロス → 上昇反転の兆候"
 
-    # 🎯 MACD乖離拡大 → 上昇トレンド継続中
-    if curr.MACD > curr.Signal and (curr.MACD - curr.Signal) > (prev.MACD - prev.Signal):
-        return "MACD乖離拡大中 → 上昇トレンド継続中"
+    # 🎯 乖離が横ばい〜やや拡大でも許容（拡大緩和）
+    if curr.MACD > curr.Signal and curr_diff >= prev_diff:
+        return "MACD乖離安定〜拡大 → 買いトレンド継続の可能性"
 
     return None
 
-# ✅ 引け前に出来高が急増している銘柄を検出 → 買い急騰の兆しとみなす
+# ✅ 引け前に出来高が急増している銘柄を検出（2倍 → 1.5倍に緩和）
 def detect_closing_surge(df):
     df = df.copy()
     df["Vol_Avg"] = df["Volume"].rolling(window=20).mean()
     latest = df.dropna().iloc[-1]
     ratio = latest["Volume"] / latest["Vol_Avg"] if latest["Vol_Avg"] > 0 else 0
 
-    # 🎯 出来高が平均の2倍超 → 強い買い圧力と判断
-    if ratio > 2:
-        return f"出来高が平均の{ratio:.1f}倍 → 急騰銘柄の可能性"
+    if ratio > 1.5:
+        return f"出来高が平均の{ratio:.1f}倍 → 急騰の兆し（緩和）"
 
     return None
 
